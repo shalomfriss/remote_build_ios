@@ -8,6 +8,10 @@ Codex:
 ./companion/scripts/agent-phone
 ```
 
+`agent-phone` also boots an iOS Simulator, builds and launches Grok Build, and
+starts the pinned `serve-sim` preview. Pass `--no-simulator` to run only the ACP
+bridge, or set `GROK_SIMULATOR_DEVICE` to a simulator name or UDID.
+
 Remote access through ngrok (the bridge's TLS + PIN protection remains active):
 
 ```bash
@@ -17,6 +21,8 @@ Remote access through ngrok (the bridge's TLS + PIN protection remains active):
 Paste the printed `tcp://...` endpoint into the app's Advanced host field and
 paste the PIN normally. To keep the same public address between runs, reserve a
 TCP address in ngrok and pass `--ngrok-url host:port` or set `GROK_NGROK_URL`.
+With `--ngrok`, the serve-sim web preview is also exposed over HTTPS and sent
+to the connected iOS app automatically.
 
 Claude:
 

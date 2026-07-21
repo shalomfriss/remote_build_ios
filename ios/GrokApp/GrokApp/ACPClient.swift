@@ -371,6 +371,20 @@ final class ACPClient: ObservableObject {
         return resp.result?["values"]?.objectValue ?? [:]
     }
 
+    func fetchSimulatorURL() async -> URL? {
+        guard isPaired else { return nil }
+        do {
+            let response = try await sendRPC(
+                method: ACPProtocol.companionSimulatorInfoMethod,
+                params: .object([:])
+            )
+            guard let value = response.result?["url"]?.stringValue else { return nil }
+            return URL(string: value)
+        } catch {
+            return nil
+        }
+    }
+
     func refreshBilling() async {
         guard isPaired else { return }
         do {

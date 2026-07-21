@@ -15,7 +15,7 @@ struct ContentView: View {
         case .pagerSettings:
             PagerSettingsView()
         case .agent:
-            AgentSessionView()
+            AgentWorkspaceView()
         case .dashboard:
             DashboardView()
         case .themePicker:

@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRIDGE_PY="$ROOT/companion/scripts/acp_tcp_bridge.py"
+NGROK_ENDPOINT_PY="$ROOT/companion/scripts/ngrok_endpoint.py"
 HOST="${GROK_ACP_HOST:-0.0.0.0}"
 PORT="${GROK_ACP_PORT:-7391}"
 UPSTREAM="$ROOT/upstream-grok-build"
@@ -128,24 +129,7 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
 
   NGROK_ENDPOINT=""
   for _ in {1..150}; do
-    NGROK_ENDPOINT="$(python3 - "$NGROK_LOG" <<'PY'
-import json
-import sys
-
-try:
-    lines = open(sys.argv[1], encoding="utf-8").readlines()
-except OSError:
-    lines = []
-for line in reversed(lines):
-    try:
-        endpoint = json.loads(line).get("url", "")
-    except json.JSONDecodeError:
-        continue
-    if endpoint.startswith("tcp://"):
-        print(endpoint)
-        break
-PY
-)"
+    NGROK_ENDPOINT="$(python3 "$NGROK_ENDPOINT_PY" "$NGROK_LOG" tcp)"
     [[ -n "$NGROK_ENDPOINT" ]] && break
     if ! kill -0 "$NGROK_PID" 2>/dev/null; then
       echo "[start-acp-bridge] ERROR: ngrok stopped before creating a tunnel" >&2

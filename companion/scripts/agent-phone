@@ -8,16 +8,152 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOST="${GROK_ACP_HOST:-127.0.0.1}"
 PORT="${GROK_ACP_PORT:-7391}"
 AGENT="${ACP_AGENT:-codex}"
+SIMULATOR="${GROK_START_SIMULATOR:-1}"
+SIMULATOR_PORT="${GROK_SIMULATOR_PORT:-3200}"
+SERVE_SIM_VERSION="${SERVE_SIM_VERSION:-0.1.45}"
+USE_NGROK=0
+FORWARD_ARGS=()
+BRIDGE_PID=""
+SERVE_SIM_PID=""
+SIM_NGROK_PID=""
+SIM_NGROK_LOG=""
+SIM_UDID=""
 
 export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
 export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$HOME/Library/Application Support/GrokBuild/state}"
 mkdir -p "$GROK_COMPANION_CWD" "$GROK_COMPANION_STATE_DIR"
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-simulator) SIMULATOR=0; shift ;;
+    --ngrok) USE_NGROK=1; FORWARD_ARGS+=("$1"); shift ;;
+    --ngrok-url) USE_NGROK=1; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
+    --port) PORT="$2"; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
+    -h|--help) SIMULATOR=0; FORWARD_ARGS+=("$1"); shift ;;
+    *) FORWARD_ARGS+=("$1"); shift ;;
+  esac
+done
+
 echo "agent-phone: ${AGENT} ACP agent ← TLS+PIN on ${HOST}:${PORT}"
 echo "agent-phone: workspace=${GROK_COMPANION_CWD}"
 echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
 echo ""
 
-exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
-  --real --agent "$AGENT" --host "$HOST" --port "$PORT" "$@"
+if [[ "$SIMULATOR" != "1" ]]; then
+  exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+    --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}"
+fi
+
+cleanup() {
+  [[ -n "$BRIDGE_PID" ]] && kill -0 "$BRIDGE_PID" 2>/dev/null && kill "$BRIDGE_PID" 2>/dev/null || true
+  [[ -n "$SIM_NGROK_PID" ]] && kill -0 "$SIM_NGROK_PID" 2>/dev/null && kill "$SIM_NGROK_PID" 2>/dev/null || true
+  [[ -n "$SERVE_SIM_PID" ]] && kill -0 "$SERVE_SIM_PID" 2>/dev/null && kill "$SERVE_SIM_PID" 2>/dev/null || true
+  if [[ -n "$SIM_UDID" ]]; then
+    npx --yes "serve-sim@${SERVE_SIM_VERSION}" --kill "$SIM_UDID" >/dev/null 2>&1 || true
+  fi
+  [[ -n "$SIM_NGROK_LOG" ]] && rm -f "$SIM_NGROK_LOG"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+echo "agent-phone: preparing iOS Simulator and building Grok Build"
+SIM_RUNTIME_JSON="$(python3 "$ROOT/companion/scripts/simulator_runtime.py" \
+  --project "$ROOT/ios/GrokApp/GrokApp.xcodeproj" \
+  --derived-data "$GROK_COMPANION_STATE_DIR/DerivedData" \
+  --device "${GROK_SIMULATOR_DEVICE:-}")"
+SIM_UDID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["udid"])' <<<"$SIM_RUNTIME_JSON")"
+SIM_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<<"$SIM_RUNTIME_JSON")"
+
+SERVE_SIM_LOG="$GROK_COMPANION_STATE_DIR/serve-sim.log"
+if ! python3 - "$SIMULATOR_PORT" <<'PY'
+import socket
+import sys
+with socket.socket() as probe:
+    probe.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+then
+  echo "agent-phone: port ${SIMULATOR_PORT} is already in use; set GROK_SIMULATOR_PORT to another port" >&2
+  exit 1
+fi
+npx --yes "serve-sim@${SERVE_SIM_VERSION}" "$SIM_UDID" \
+  --port "$SIMULATOR_PORT" --host 127.0.0.1 --fit --panes none >"$SERVE_SIM_LOG" 2>&1 &
+SERVE_SIM_PID=$!
+
+for _ in {1..240}; do
+  if curl --silent --fail --output /dev/null "http://127.0.0.1:${SIMULATOR_PORT}/api"; then
+    break
+  fi
+  if ! kill -0 "$SERVE_SIM_PID" 2>/dev/null; then
+    echo "agent-phone: serve-sim stopped before becoming ready" >&2
+    tail -n 20 "$SERVE_SIM_LOG" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+if ! curl --silent --fail --output /dev/null "http://127.0.0.1:${SIMULATOR_PORT}/api"; then
+  echo "agent-phone: timed out waiting for serve-sim" >&2
+  tail -n 20 "$SERVE_SIM_LOG" >&2
+  exit 1
+fi
+
+export GROK_SIMULATOR_URL="http://127.0.0.1:${SIMULATOR_PORT}"
+if [[ "$USE_NGROK" -eq 1 ]]; then
+  SIM_NGROK_LOG="$(mktemp -t grok-build-simulator-ngrok.XXXXXX)"
+  ngrok http "127.0.0.1:${SIMULATOR_PORT}" --name grok-build-simulator \
+    --log stdout --log-format json >"$SIM_NGROK_LOG" 2>&1 &
+  SIM_NGROK_PID=$!
+  for _ in {1..150}; do
+    REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_endpoint.py" "$SIM_NGROK_LOG" https)"
+    [[ -n "$REMOTE_SIMULATOR_URL" ]] && break
+    if ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
+      echo "agent-phone: ngrok stopped before exposing serve-sim" >&2
+      tail -n 10 "$SIM_NGROK_LOG" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [[ -z "${REMOTE_SIMULATOR_URL:-}" ]]; then
+    echo "agent-phone: timed out waiting for the serve-sim ngrok endpoint" >&2
+    exit 1
+  fi
+  export GROK_SIMULATOR_URL="$REMOTE_SIMULATOR_URL"
+fi
+
+echo "agent-phone: simulator=${SIM_NAME} (${SIM_UDID})"
+echo "agent-phone: simulator preview=${GROK_SIMULATOR_URL}"
+
+bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+  --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}" &
+BRIDGE_PID=$!
+
+BRIDGE_READY=0
+for _ in {1..100}; do
+  if python3 - "$HOST" "$PORT" <<'PY'
+import socket
+import sys
+try:
+    with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=0.1):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
+  then
+    BRIDGE_READY=1
+    break
+  fi
+  if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+    wait "$BRIDGE_PID"
+    exit $?
+  fi
+  sleep 0.1
+done
+if [[ "$BRIDGE_READY" -ne 1 ]]; then
+  echo "agent-phone: timed out waiting for the ACP bridge" >&2
+  exit 1
+fi
+
+xcrun simctl launch "$SIM_UDID" app.grokbuild.ios >/dev/null
+echo "agent-phone: Grok Build launched; serve-sim and the agent are ready"
+wait "$BRIDGE_PID"

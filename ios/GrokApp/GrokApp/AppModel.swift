@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
     @Published var mermaidRenderError: String?
     /// Shown in agent chrome when transport drops and reconnect is in progress.
     @Published var reconnectBanner: String?
+    @Published var simulatorURL: URL?
 
     let acp = ACPClient()
     let companionBrowser = CompanionBrowser()
@@ -537,6 +538,7 @@ final class AppModel: ObservableObject {
                 return
             }
             if acp.sessionReady, acp.sessionId != nil {
+                simulatorURL = await acp.fetchSimulatorURL()
                 connectionPhase = .succeeded
                 setupError = nil
                 let pinned = CompanionConfig.pinnedFingerprint
@@ -609,6 +611,7 @@ final class AppModel: ObservableObject {
         screen = .agent
         // Reuse live ACP session — tearing down caused red dot + hung prompts.
         if acp.sessionReady {
+            Task { simulatorURL = await acp.fetchSimulatorURL() }
             return
         }
         acp.disconnect()
@@ -619,6 +622,16 @@ final class AppModel: ObservableObject {
             acp.setPreferredEndpoint(nil)
         }
         acp.connect()
+        Task {
+            while !acp.sessionReady && acp.lastError == nil {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            simulatorURL = await acp.fetchSimulatorURL()
+        }
+    }
+
+    func refreshSimulatorURL() async {
+        simulatorURL = await acp.fetchSimulatorURL()
     }
 
     func startNewSession() {

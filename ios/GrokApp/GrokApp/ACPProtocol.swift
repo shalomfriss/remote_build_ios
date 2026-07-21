@@ -10,6 +10,7 @@ enum ACPProtocol {
     static let companionMermaidRenderMethod = "x.ai/companion/mermaid_render"
     static let companionConfigGetMethod = "x.ai/companion/config_get"
     static let companionConfigSetMethod = "x.ai/companion/config_set"
+    static let companionSimulatorInfoMethod = "x.ai/companion/simulator_info"
     static let billingMethod = "x.ai/billing"
     static let pairPrefix = "grok_pair"
     static let pairResultPrefix = "grok_pair_result"
