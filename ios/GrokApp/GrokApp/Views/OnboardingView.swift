@@ -91,7 +91,7 @@ struct OnboardingView: View {
             Text("Mac terminal")
                 .font(.caption.monospaced())
                 .foregroundStyle(theme.textSecondary)
-            Text("./companion/scripts/agent-phone\n# defaults to Codex; copy the PIN")
+            Text("./companion/scripts/agent-phone\n# remote: add --ngrok; copy endpoint + PIN")
                 .font(.caption2.monospaced())
                 .foregroundStyle(theme.textPrimary)
                 .padding(12)
@@ -185,10 +185,10 @@ struct OnboardingView: View {
 
     private func advancedSection(theme: GrokTheme) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("host / port for agent-phone (default 127.0.0.1:7391)")
+            Text("host / port, or paste the tcp:// endpoint printed by --ngrok")
                 .font(.caption2.monospaced())
                 .foregroundStyle(theme.textSecondary)
-            TextField("host", text: $model.acpHostDraft)
+            TextField("host or tcp://host:port", text: $model.acpHostDraft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.caption.monospaced())

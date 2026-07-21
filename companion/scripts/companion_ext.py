@@ -18,6 +18,7 @@ from typing import Any
 MERMAID_RENDER_METHOD = "x.ai/companion/mermaid_render"
 CONFIG_GET_METHOD = "x.ai/companion/config_get"
 CONFIG_SET_METHOD = "x.ai/companion/config_set"
+SIMULATOR_INFO_METHOD = "x.ai/companion/simulator_info"
 
 # Shell-owned `[ui]` keys we expose to iOS (settings/defs.rs).
 UI_BOOL_KEYS = {
@@ -242,7 +243,12 @@ def handle_companion_rpc(
 ) -> bytes | None:
     """If msg is a companion-owned method, return a full JSON-RPC response line."""
     method = msg.get("method")
-    if method not in (MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD):
+    if method not in (
+        MERMAID_RENDER_METHOD,
+        CONFIG_GET_METHOD,
+        CONFIG_SET_METHOD,
+        SIMULATOR_INFO_METHOD,
+    ):
         return None
     req_id = msg.get("id")
     params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
@@ -288,6 +294,14 @@ def handle_companion_rpc(
             }
         else:
             body = {"jsonrpc": "2.0", "id": req_id, "result": result}
+        return (json.dumps(body) + "\n").encode("utf-8")
+
+    if method == SIMULATOR_INFO_METHOD:
+        body = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"url": os.environ.get("GROK_SIMULATOR_URL", "")},
+        }
         return (json.dumps(body) + "\n").encode("utf-8")
 
     return None

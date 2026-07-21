@@ -57,6 +57,9 @@
 		B10000010000000000000033 /* 0.2.99.md in Resources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000033 /* 0.2.99.md */; };
 		B10000010000000000000034 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000034 /* MermaidBlockView.swift */; };
 		B10000010000000000000035 /* PagerSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000035 /* PagerSettingsView.swift */; };
+		B10000010000000000000036 /* CompanionConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000036 /* CompanionConfigTests.swift */; };
+		B10000010000000000000037 /* AgentWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000037 /* AgentWorkspaceView.swift */; };
+		B10000010000000000000038 /* RemoteSimulatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000038 /* RemoteSimulatorView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -123,6 +126,9 @@
 		F10000010000000000000021 /* GrokAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GrokAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F10000010000000000000034 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
 		F10000010000000000000035 /* PagerSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagerSettingsView.swift; sourceTree = "<group>"; };
+		F10000010000000000000036 /* CompanionConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConfigTests.swift; sourceTree = "<group>"; };
+		F10000010000000000000037 /* AgentWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWorkspaceView.swift; sourceTree = "<group>"; };
+		F10000010000000000000038 /* RemoteSimulatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSimulatorView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -186,6 +192,7 @@
 				F1000001000000000000001E /* ACPProtocolTests.swift */,
 				F1000001000000000000001F /* SlashCommandCatalogTests.swift */,
 				F1000001000000000000002B /* SessionChromeTests.swift */,
+				F10000010000000000000036 /* CompanionConfigTests.swift */,
 			);
 			path = GrokAppTests;
 			sourceTree = "<group>";
@@ -231,6 +238,8 @@
 				F10000010000000000000032 /* ChangelogView.swift */,
 				F10000010000000000000034 /* MermaidBlockView.swift */,
 				F10000010000000000000035 /* PagerSettingsView.swift */,
+				F10000010000000000000037 /* AgentWorkspaceView.swift */,
+				F10000010000000000000038 /* RemoteSimulatorView.swift */,
 				F10000010000000000000024 /* DashboardView.swift */,
 			);
 			path = Views;
@@ -429,6 +438,8 @@
 				B10000010000000000000032 /* ChangelogView.swift in Sources */,
 				B10000010000000000000034 /* MermaidBlockView.swift in Sources */,
 				B10000010000000000000035 /* PagerSettingsView.swift in Sources */,
+				B10000010000000000000037 /* AgentWorkspaceView.swift in Sources */,
+				B10000010000000000000038 /* RemoteSimulatorView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -440,6 +451,7 @@
 				B1000001000000000000001E /* ACPProtocolTests.swift in Sources */,
 				B1000001000000000000001F /* SlashCommandCatalogTests.swift in Sources */,
 				B1000001000000000000002B /* SessionChromeTests.swift in Sources */,
+				B10000010000000000000036 /* CompanionConfigTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
