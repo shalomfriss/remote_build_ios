@@ -1,8 +1,8 @@
 # grok-ios
 
-iOS client for [Grok Build](https://github.com/xai-org/grok-build).
+iOS ACP client derived from [Grok Build](https://github.com/xai-org/grok-build).
 
-The phone is the pager UI. Your Mac runs the official agent via `grok agent serve`. They talk ACP over WebSocket.
+The phone keeps the Grok Build pager UI and ACP harness. Your Mac runs Codex, Claude, or a fully local coding agent through a small TLS bridge. No inference request is sent through xAI's gateway.
 
 **Author:** Pedro Shakour  
 **License:** Apache-2.0
@@ -11,8 +11,7 @@ The phone is the pager UI. Your Mac runs the official agent via `grok agent serv
 
 ## Requirements
 
-- macOS with [Grok CLI](https://x.ai/cli) (`grok`)
-- xAI API key
+- macOS with one supported ACP agent (see below)
 - Xcode 16+ (Simulator or device)
 - iOS 17+
 
@@ -31,15 +30,37 @@ git submodule update --init --recursive
 
 ## Quick start
 
-### 1. Start the agent on your Mac
+### 1. Start an agent on your Mac
+
+Codex (default; uses your existing Codex/ChatGPT login or OpenAI key):
 
 ```bash
-export XAI_API_KEY=xai-...
-lsof -ti tcp:2419 | xargs kill -9 2>/dev/null
-grok agent serve
+./companion/scripts/agent-phone
 ```
 
-The CLI prints a **Secret**. Leave this terminal open.
+Claude (uses your existing Claude Code login):
+
+```bash
+ACP_AGENT=claude ./companion/scripts/agent-phone
+```
+
+Local Ollama model through OpenCode (no hosted inference):
+
+```bash
+ollama pull qwen3-coder:30b
+ACP_AGENT=local ACP_MODEL=ollama/qwen3-coder:30b ./companion/scripts/agent-phone
+```
+
+The bridge prints a six-digit **PIN**. Leave this terminal open. Authenticate with each provider's CLI on the Mac before starting the bridge; provider credentials are never entered into the iOS app.
+
+Agent prerequisites:
+
+| Backend | ACP command used by the bridge |
+|---------|--------------------------------|
+| Codex | `npx @agentclientprotocol/codex-acp` (maintained adapter with compatible Codex runtime) |
+| Claude | `claude-agent-acp`, or `npx @agentclientprotocol/claude-agent-acp` |
+| Local | `opencode acp` with an injected, Ollama-only configuration |
+| Custom | `ACP_AGENT_COMMAND='your-acp-agent --stdio'` |
 
 ### 2. Run the iOS app
 
@@ -53,27 +74,27 @@ Or:
 
 ### 3. Connect
 
-In the app: **Setup** → paste the Secret → **connect** → **continue** → **New worktree**.
+In the app: **Setup** → paste the PIN → **connect** → **continue** → **New worktree**.
 
 | Client | Host | Port |
 |--------|------|------|
-| Simulator | `127.0.0.1` | `2419` |
-| Physical iPhone (same Wi‑Fi) | your Mac LAN IP | `2419` |
+| Simulator | `127.0.0.1` | `7391` |
+| Physical iPhone (same Wi‑Fi) | your Mac LAN IP | `7391` |
 
 ## Architecture
 
 ```
-iOS (SwiftUI)  ──ACP / JSON-RPC over WebSocket──►  grok agent serve (Mac)
+iOS (SwiftUI) ──ACP / JSON-RPC over TLS──► bridge ──ACP stdio──► Codex / Claude / OpenCode
 ```
 
-Optional legacy LAN bridge (TLS + Bonjour) lives under `companion/` for experiments. The default path is official `grok agent serve`.
+The bridge reuses the existing pairing, permission, session, tool-call, and scrollback harness. Only the model-facing ACP process changes.
 
 ## Repo layout
 
 | Path | Purpose |
 |------|---------|
 | `ios/GrokApp/` | SwiftUI app |
-| `companion/` | Legacy ACP TCP/TLS bridge |
+| `companion/` | Provider-neutral ACP TCP/TLS bridge |
 | `shared/` | Themes + slash catalog from upstream |
 | `upstream-grok-build/` | Pinned [xai-org/grok-build](https://github.com/xai-org/grok-build) submodule |
 | `scripts/` | Demo + smoke helpers |
@@ -95,7 +116,8 @@ Stub ACP (CI / no API key):
 ## Notes
 
 - Not on the App Store — open-source / sideload / Simulator only.
-- Agent runtime stays on the Mac; the phone is a remote pager.
+- Agent runtime and provider credentials stay on the Mac; the phone is a remote pager.
+- Codex and Claude may still have their own subscription/API costs. The local Ollama path has no per-token gateway fee.
 - Themes and slash names are taken from upstream Grok Build.
 
 ## License

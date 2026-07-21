@@ -11,6 +11,9 @@ PORT="${GROK_ACP_PORT:-7391}"
 UPSTREAM="$ROOT/upstream-grok-build"
 STUB=0
 REAL=0
+AGENT="${ACP_AGENT:-codex}"
+MODEL="${ACP_MODEL:-}"
+AGENT_COMMAND="${ACP_AGENT_COMMAND:-}"
 ADVERTISE=1
 NO_TLS=0
 NO_PAIR=0
@@ -20,7 +23,12 @@ usage() {
   cat <<'EOF'
 Usage: start-acp-bridge.sh [options]
 
-Starts TLS ACP bridge for Grok Build iOS. Prints PIN + cert fingerprint on start.
+Starts the TLS ACP bridge for the iOS app. Prints PIN + cert fingerprint on start.
+
+Agent options:
+  --agent codex|claude|local   ACP backend (default: codex)
+  --model MODEL               Codex/local model; local must start with ollama/
+  --agent-command COMMAND     Custom ACP stdio command (overrides agent/model)
 EOF
 }
 
@@ -35,6 +43,9 @@ while [[ $# -gt 0 ]]; do
     --port) PORT="$2"; shift 2 ;;
     --stub) STUB=1; shift ;;
     --real) REAL=1; shift ;;
+    --agent) AGENT="$2"; shift 2 ;;
+    --model) MODEL="$2"; shift 2 ;;
+    --agent-command) AGENT_COMMAND="$2"; shift 2 ;;
     --no-tls) NO_TLS=1; shift ;;
     --no-pair) NO_PAIR=1; shift ;;
     --no-advertise) ADVERTISE=0; shift ;;
@@ -47,6 +58,9 @@ done
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
 
 ARGS=(--host "$HOST" --port "$PORT" --upstream "$UPSTREAM")
+ARGS+=(--agent "$AGENT")
+[[ -n "$MODEL" ]] && ARGS+=(--model "$MODEL")
+[[ -n "$AGENT_COMMAND" ]] && ARGS+=(--agent-command "$AGENT_COMMAND")
 [[ "$STUB" -eq 1 ]] && ARGS+=(--stub)
 [[ "$REAL" -eq 1 ]] && ARGS+=(--real)
 if [[ "$NO_TLS" -eq 1 || "$NO_PAIR" -eq 1 ]]; then
@@ -76,10 +90,11 @@ echo "[start-acp-bridge] cert fingerprint (short): ${GROK_COMPANION_FP_SHORT}"
 
 if [[ "$ADVERTISE" -eq 1 ]] && command -v dns-sd >/dev/null 2>&1; then
   # Full DER SHA-256 in TXT so the phone can pin without pasting.
-  dns-sd -R "Grok Build" _grok-build._tcp local "$PORT" "fp=${GROK_COMPANION_FP}" "fps=${GROK_COMPANION_FP_SHORT}" >/dev/null 2>&1 &
+  dns-sd -R "Coding Agent" _grok-build._tcp local "$PORT" "fp=${GROK_COMPANION_FP}" "fps=${GROK_COMPANION_FP_SHORT}" >/dev/null 2>&1 &
   DNS_PID=$!
-  echo "[start-acp-bridge] Bonjour: Grok Build _grok-build._tcp :${PORT} (fp in TXT)"
+  echo "[start-acp-bridge] Bonjour: Coding Agent _grok-build._tcp :${PORT} (fp in TXT)"
 fi
 
 echo "[start-acp-bridge] workspace=${GROK_COMPANION_CWD}"
+echo "[start-acp-bridge] agent=${AGENT}${MODEL:+ model=${MODEL}}"
 exec python3 "$BRIDGE_PY" "${ARGS[@]}"

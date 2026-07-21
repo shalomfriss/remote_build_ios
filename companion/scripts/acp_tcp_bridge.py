@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Pedro Shakour
 # SPDX-License-Identifier: Apache-2.0
-"""TLS + PIN companion bridge: newline JSON-RPC (ACP) ↔ `grok agent stdio`."""
+"""TLS + PIN companion bridge: newline JSON-RPC (ACP) ↔ any ACP agent."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ from companion_ext import (  # noqa: E402
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7391
-XAI_API_KEY_METHOD_ID = "xai.api_key"
 WORKSPACE_LIST_METHOD = "workspace/list"
 COMPANION_METHODS = {MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD}
 
@@ -44,24 +43,70 @@ def log(msg: str) -> None:
     print(f"[acp-bridge] {msg}", file=sys.stderr, flush=True)
 
 
-def find_grok(upstream: Path) -> list[str] | None:
-    grok = shutil.which("grok")
-    if grok:
-        return [grok, "agent", "stdio"]
-    cargo = shutil.which("cargo")
-    if cargo and (upstream / "Cargo.toml").is_file():
+def find_agent(
+    provider: str,
+    model: str | None = None,
+    command: str | None = None,
+) -> list[str] | None:
+    """Resolve an ACP stdio agent without involving the xAI gateway."""
+    if command:
+        argv = shlex.split(command)
+        return argv or None
+
+    if provider == "codex":
+        npx = shutil.which("npx")
+        if npx:
+            argv = [npx, "--yes", "@agentclientprotocol/codex-acp"]
+            if model:
+                config = json.dumps({"model": model}, separators=(",", ":"))
+                return ["/usr/bin/env", f"CODEX_CONFIG={config}", *argv]
+            return argv
+        executable = shutil.which("codex-acp")
+        if not executable:
+            return None
+        # Compatibility fallback for standalone adapters when npx is unavailable.
+        argv = [executable]
+        if model:
+            argv.extend(["--config", f"model={json.dumps(model)}"])
+        return argv
+
+    if provider == "claude":
+        executable = shutil.which("claude-agent-acp")
+        if executable:
+            return [executable]
+        npx = shutil.which("npx")
+        if npx:
+            return [npx, "--yes", "@agentclientprotocol/claude-agent-acp"]
+        return None
+
+    if provider == "local":
+        executable = shutil.which("opencode")
+        if not executable:
+            return None
+        # An explicit Ollama model makes the local path deterministic and prevents
+        # OpenCode from falling back to a configured hosted provider.
+        local_model = model or "ollama/qwen3-coder:30b"
+        if not local_model.startswith("ollama/"):
+            return None
+        model_id = local_model.removeprefix("ollama/")
+        config = {
+            "model": local_model,
+            "provider": {
+                "ollama": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "Ollama (local)",
+                    "options": {"baseURL": "http://127.0.0.1:11434/v1"},
+                    "models": {model_id: {"name": model_id}},
+                }
+            },
+        }
         return [
-            cargo,
-            "run",
-            "--quiet",
-            "--manifest-path",
-            str(upstream / "Cargo.toml"),
-            "-p",
-            "xai-grok-pager-bin",
-            "--",
-            "agent",
-            "stdio",
+            "/usr/bin/env",
+            f"OPENCODE_CONFIG_CONTENT={json.dumps(config, separators=(',', ':'))}",
+            executable,
+            "acp",
         ]
+
     return None
 
 
@@ -151,11 +196,7 @@ class AcpStub:
                         "loadSession": True,
                         "promptCapabilities": {"image": False, "audio": False},
                     },
-                    "authMethods": [{
-                        "id": XAI_API_KEY_METHOD_ID,
-                        "name": "xai.api_key",
-                        "description": "XAI_API_KEY or api_key in config.toml",
-                    }],
+                    "authMethods": [],
                 },
             }))
             return out
@@ -166,7 +207,7 @@ class AcpStub:
             key = extract_api_key(msg)
             if key:
                 log("stub: received API key via authenticate (not logged)")
-            if method_id not in (None, XAI_API_KEY_METHOD_ID, "stub-api-key"):
+            if method_id not in (None, "stub-api-key", "xai.api_key"):
                 out.append(json.dumps({
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -419,45 +460,10 @@ async def handle_tcp_client_stub(
         log("stub client disconnected")
 
 
-def _local_initialize_result(req_id: Any) -> bytes:
-    """Reply to phone initialize without spawning yet (avoids auth deadlock)."""
-    return (json.dumps({
-        "jsonrpc": "2.0",
-        "id": req_id,
-        "result": {
-            "protocolVersion": 1,
-            "agentCapabilities": {
-                "loadSession": True,
-                "promptCapabilities": {"image": False, "audio": False},
-            },
-            "authMethods": [{
-                "id": XAI_API_KEY_METHOD_ID,
-                "name": "xai.api_key",
-                "description": "XAI_API_KEY or api_key in config.toml",
-            }],
-        },
-    }) + "\n").encode("utf-8")
-
-
-def _rewrite_authenticate_for_grok(msg: dict[str, Any]) -> bytes:
-    """Official grok expects headless auth + XAI_API_KEY in env (not phone xaiApiKey meta)."""
-    params = dict(msg.get("params") or {})
-    meta = dict(params.get("_meta") or {}) if isinstance(params.get("_meta"), dict) else {}
-    meta.pop("xaiApiKey", None)
-    meta.pop("apiKey", None)
-    meta.pop("XAI_API_KEY", None)
-    meta["headless"] = True
-    params["_meta"] = meta
-    params.setdefault("methodId", XAI_API_KEY_METHOD_ID)
-    out = dict(msg)
-    out["params"] = params
-    return (json.dumps(out) + "\n").encode("utf-8")
-
-
 async def handle_tcp_client_real(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-    grok_argv: list[str],
+    agent_argv: list[str],
     cwd: Path,
     pin: str,
     require_pair: bool,
@@ -469,78 +475,15 @@ async def handle_tcp_client_real(
         log(f"pairing failed from {peer}")
         return
     log(f"client paired from {peer}")
-    buffered: list[bytes] = []
-    api_key: str | None = None
     workspace = Path(os.environ.get("GROK_COMPANION_CWD") or cwd or Path.cwd())
-    # Phone waits for initialize before authenticate. Answer initialize locally,
-    # wait for authenticate (so we can inject XAI_API_KEY), then spawn grok.
-    # Grok's own initialize response must be dropped (phone already got ours).
-    initialize_req_id: Any = None
-    skip_initialize_response = False
 
     try:
-        while True:
-            line = await reader.readline()
-            if not line:
-                return
-            line = normalize_acp_line(line, workspace)
-            stripped = line.decode("utf-8", errors="replace").strip()
-            if not stripped:
-                continue
-            try:
-                msg = json.loads(stripped.replace("\\/", "/"))
-            except json.JSONDecodeError:
-                continue
-            method = msg.get("method")
-            if method == WORKSPACE_LIST_METHOD:
-                req_id = msg.get("id")
-                files = list_workspace_files(workspace)
-                writer.write((json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {"files": files},
-                }) + "\n").encode("utf-8"))
-                await writer.drain()
-                continue
-
-            if method in (MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD):
-                reply = handle_companion_rpc(msg, upstream)
-                if reply is not None:
-                    writer.write(reply)
-                    await writer.drain()
-                continue
-
-            if method == "initialize":
-                initialize_req_id = msg.get("id")
-                skip_initialize_response = True
-                buffered.append(line)
-                writer.write(_local_initialize_result(initialize_req_id))
-                await writer.drain()
-                log("local initialize reply (waiting for authenticate before spawn)")
-                continue
-
-            if method == "authenticate":
-                api_key = extract_api_key(msg)
-                buffered.append(_rewrite_authenticate_for_grok(msg))
-                break
-
-            buffered.append(line)
-            if method in ("session/new", "session/create", "session/prompt"):
-                break
-
         env = os.environ.copy()
-        if api_key:
-            env["XAI_API_KEY"] = api_key
-            log("injected XAI_API_KEY from phone authenticate (not logged)")
-        elif not env.get("XAI_API_KEY"):
-            log("no phone API key — grok will use ~/.grok/auth.json if present")
-        # Force Grok Build harness identity (same escape hatch as upstream tests).
-        env.setdefault("GROK_AGENT", "grok-build")
-        env.setdefault("GROK_MODEL", "grok-build-0.1")
-
-        log(f"spawning: {shlex.join(grok_argv)} (cwd={workspace})")
+        # Do not leak a stale xAI credential into child agents.
+        env.pop("XAI_API_KEY", None)
+        log(f"spawning: {shlex.join(agent_argv)} (cwd={workspace})")
         proc = await asyncio.create_subprocess_exec(
-            *grok_argv,
+            *agent_argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=None,
@@ -548,16 +491,12 @@ async def handle_tcp_client_real(
             env=env,
         )
         assert proc.stdin and proc.stdout
-        for raw in buffered:
-            proc.stdin.write(raw)
-        await proc.stdin.drain()
         await handle_tcp_client_stdio(
             reader,
             writer,
             proc,
             workspace,
             upstream=upstream,
-            drop_response_id=initialize_req_id if skip_initialize_response else None,
         )
     finally:
         log(f"client disconnected from {peer}")
@@ -676,12 +615,14 @@ async def handle_tcp_client_stdio(
             await asyncio.wait_for(proc.wait(), timeout=3)
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
+    log(f"agent process exited with status {proc.returncode}")
 
 
 async def run_server(
     host: str,
     port: int,
-    grok_argv: list[str] | None,
+    agent_argv: list[str] | None,
     cwd: Path,
     ssl_context: ssl.SSLContext | None,
     pin: str,
@@ -693,17 +634,17 @@ async def run_server(
     async def on_client(
         reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        if stub or grok_argv is None:
+        if stub or agent_argv is None:
             await handle_tcp_client_stub(
                 reader, writer, pin, require_pair, state_dir, upstream
             )
         else:
             await handle_tcp_client_real(
-                reader, writer, grok_argv, cwd, pin, require_pair, state_dir, upstream
+                reader, writer, agent_argv, cwd, pin, require_pair, state_dir, upstream
             )
 
     server = await asyncio.start_server(on_client, host, port, ssl=ssl_context)
-    mode = "STUB" if stub or grok_argv is None else "REAL"
+    mode = "STUB" if stub or agent_argv is None else "REAL"
     tls_label = "TLS" if ssl_context else "plain"
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     log(f"{mode} {tls_label} listening on {addrs}")
@@ -721,11 +662,23 @@ def build_ssl_context(cert: Path, key: Path) -> ssl.SSLContext:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Grok ACP TLS companion bridge")
+    parser = argparse.ArgumentParser(description="Provider-neutral ACP TLS companion bridge")
     parser.add_argument("--host", default=os.environ.get("GROK_ACP_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int, default=int(os.environ.get("GROK_ACP_PORT", DEFAULT_PORT)))
-    parser.add_argument("--stub", action="store_true", help="Protocol stub (no grok)")
-    parser.add_argument("--real", action="store_true", help="Require real grok")
+    parser.add_argument("--stub", action="store_true", help="Protocol stub (no agent)")
+    parser.add_argument("--real", action="store_true", help="Require the selected real agent")
+    parser.add_argument(
+        "--agent",
+        choices=("codex", "claude", "local"),
+        default=os.environ.get("ACP_AGENT", "codex"),
+        help="ACP agent provider (default: codex)",
+    )
+    parser.add_argument("--model", default=os.environ.get("ACP_MODEL"))
+    parser.add_argument(
+        "--agent-command",
+        default=os.environ.get("ACP_AGENT_COMMAND"),
+        help="Custom ACP stdio command; overrides --agent and --model",
+    )
     parser.add_argument("--no-tls", action="store_true", help="Plain TCP (requires GROK_COMPANION_INSECURE=1)")
     parser.add_argument("--no-pair", action="store_true", help="Skip PIN (requires GROK_COMPANION_INSECURE=1)")
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
@@ -772,12 +725,12 @@ def main() -> int:
         ))
         return 0
 
-    grok_argv = find_grok(args.upstream)
-    if not grok_argv:
+    agent_argv = find_agent(args.agent, args.model, args.agent_command)
+    if not agent_argv:
         if args.real:
-            log("ERROR: --real requires grok on PATH or cargo+upstream build")
+            log(f"ERROR: --real requires an installed ACP agent for {args.agent!r}")
             return 1
-        log("grok not found — falling back to STUB (pass --stub explicitly for tests)")
+        log(f"{args.agent} ACP agent not found — falling back to STUB")
         ssl_ctx = build_ssl_context(cert, key) if use_tls else None
         asyncio.run(run_server(
             args.host, args.port, None, args.upstream, ssl_ctx,
@@ -786,10 +739,10 @@ def main() -> int:
         return 0
 
     if not use_tls or not require_pair:
-        log("WARNING: real grok without TLS+PIN is discouraged; use defaults for production")
+        log("WARNING: a real agent without TLS+PIN is discouraged; use defaults for production")
     ssl_ctx = build_ssl_context(cert, key) if use_tls else None
     asyncio.run(run_server(
-        args.host, args.port, grok_argv, args.upstream, ssl_ctx,
+        args.host, args.port, agent_argv, args.upstream, ssl_ctx,
         pin, require_pair, args.state_dir, stub=False, upstream=args.upstream,
     ))
     return 0

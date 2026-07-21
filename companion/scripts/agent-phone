@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Pedro Shakour
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+HOST="${GROK_ACP_HOST:-127.0.0.1}"
+PORT="${GROK_ACP_PORT:-7391}"
+AGENT="${ACP_AGENT:-codex}"
+
+export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
+export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
+export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$HOME/Library/Application Support/GrokBuild/state}"
+mkdir -p "$GROK_COMPANION_CWD" "$GROK_COMPANION_STATE_DIR"
+
+echo "agent-phone: ${AGENT} ACP agent ← TLS+PIN on ${HOST}:${PORT}"
+echo "agent-phone: workspace=${GROK_COMPANION_CWD}"
+echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
+echo ""
+
+exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+  --real --agent "$AGENT" --host "$HOST" --port "$PORT" "$@"

@@ -4,7 +4,7 @@
 import Foundation
 import Network
 
-/// Typed ACP client: TLS pairing → initialize → authenticate → session/new → prompt.
+/// Typed ACP client: TLS pairing → initialize → session/new → prompt.
 @MainActor
 final class ACPClient: ObservableObject {
     @Published private(set) var isConnected = false
@@ -32,6 +32,7 @@ final class ACPClient: ObservableObject {
     private var handshakeTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
     private var lineWaiter: CheckedContinuation<String, Error>?
+    private var lineTimeoutTask: Task<Void, Never>?
     /// TOFU: leaf fingerprint observed during TLS (persisted only after PIN succeeds).
     private let tlsFingerprintCapture = TLSFingerprintCapture()
 
@@ -99,7 +100,7 @@ final class ACPClient: ObservableObject {
         startConnection()
     }
 
-    /// Official `grok agent serve` — ACP over WebSocket, auth via `server-key` (= Secret printed by CLI).
+    /// Legacy direct WebSocket transport retained for compatibility with Grok agent serve.
     private func connectWebSocket(ep: CompanionConfig.Endpoint) {
         let secret = CompanionConfig.savedPIN.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !secret.isEmpty else {
@@ -156,6 +157,8 @@ final class ACPClient: ObservableObject {
             lineWaiter = nil
             waiter.resume(throwing: ACPClientError.cancelled)
         }
+        lineTimeoutTask?.cancel()
+        lineTimeoutTask = nil
         receiveLoopActive = false
         connection?.cancel()
         connection = nil
@@ -192,8 +195,8 @@ final class ACPClient: ObservableObject {
                     self.handshakeTask = Task { await self.runConnectPipeline() }
                 case .waiting:
                     break
-                case .failed:
-                    self.fail("Could not reach companion")
+                case .failed(let error):
+                    self.fail("Could not reach agent: \(error.localizedDescription)")
                 case .cancelled:
                     self.isConnected = false
                     self.connection = nil
@@ -454,14 +457,11 @@ final class ACPClient: ObservableObject {
             sessionId = sid
             sessionReady = true
             chrome.sessionId = sid
-            let buildModel = ACPProtocol.preferredBuildModelId
-            _ = try? await sendRPC(
-                method: "session/set_model",
-                params: ACPProtocol.sessionSetModelParams(sessionId: sid, modelId: buildModel)
-            )
-            currentModelId = buildModel
-            chrome.modelId = buildModel
-            onModelChanged?(buildModel)
+            if let modelID = result["models"]?["currentModelId"]?.stringValue {
+                currentModelId = modelID
+                chrome.modelId = modelID
+                onModelChanged?(modelID)
+            }
             if let obj = result.objectValue {
                 applyContextWindow(from: obj)
             }
@@ -498,9 +498,10 @@ final class ACPClient: ObservableObject {
                     isPaired = true
                 }
             }
-            _ = try await sendRPC(method: "initialize", params: ACPProtocol.initializeParams())
-            let key = KeychainHelper.loadAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines)
-            _ = try await sendRPC(method: "authenticate", params: ACPProtocol.authenticateParams(apiKey: key))
+            _ = try await sendRPC(
+                method: "initialize",
+                params: ACPProtocol.initializeParams()
+            )
 
             if let resumeId = preserveSessionIdOnReconnect, !resumeId.isEmpty {
                 preserveSessionIdOnReconnect = nil
@@ -520,14 +521,6 @@ final class ACPClient: ObservableObject {
                     chrome.modelId = mid
                     onModelChanged?(mid)
                 }
-                let buildModel = ACPProtocol.preferredBuildModelId
-                _ = try? await sendRPC(
-                    method: "session/set_model",
-                    params: ACPProtocol.sessionSetModelParams(sessionId: sid, modelId: buildModel)
-                )
-                currentModelId = buildModel
-                chrome.modelId = buildModel
-                onModelChanged?(buildModel)
                 if let obj = result.objectValue {
                     applyContextWindow(from: obj)
                 }
@@ -571,8 +564,7 @@ final class ACPClient: ObservableObject {
         guard let data = ACPProtocol.encodeLine(req) else {
             throw ACPClientError.encodeFailed
         }
-        try await sendRaw(data)
-        let line = try await awaitLine(timeout: 10)
+        let line = try await sendAndAwaitLine(data, timeout: 10)
         guard let result = ACPProtocol.decodePairResult(line) else {
             throw ACPClientError.pairingFailed("Invalid pair response")
         }
@@ -669,9 +661,20 @@ final class ACPClient: ObservableObject {
         let id = nextID()
         let req = ACPProtocol.JSONRPCRequest(method: method, params: params, id: id)
         guard let data = ACPProtocol.encodeLine(req) else { throw ACPClientError.encodeFailed }
-        try await sendRaw(data)
         return try await withCheckedThrowingContinuation { cont in
+            // Register before writing. Local ACP agents can respond before the
+            // Network.framework send completion callback fires.
             pendingRequests[id] = cont
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.sendRaw(data)
+                } catch {
+                    if let pending = self.pendingRequests.removeValue(forKey: id) {
+                        pending.resume(throwing: error)
+                    }
+                }
+            }
         }
     }
 
@@ -738,22 +741,31 @@ final class ACPClient: ObservableObject {
         }
     }
 
-    private func awaitLine(timeout: TimeInterval) async throws -> String {
-        try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
-                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-                    Task { @MainActor in
-                        self.lineWaiter = cont
+    private func sendAndAwaitLine(_ data: Data, timeout: TimeInterval) async throws -> String {
+        try await withCheckedThrowingContinuation { cont in
+            // Pairing replies are also local and can arrive immediately.
+            lineWaiter = cont
+            lineTimeoutTask?.cancel()
+            lineTimeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(timeout))
+                guard let self, !Task.isCancelled, let waiter = self.lineWaiter else { return }
+                self.lineWaiter = nil
+                self.lineTimeoutTask = nil
+                waiter.resume(throwing: ACPClientError.timeout)
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.sendRaw(data)
+                } catch {
+                    self.lineTimeoutTask?.cancel()
+                    self.lineTimeoutTask = nil
+                    if let waiter = self.lineWaiter {
+                        self.lineWaiter = nil
+                        waiter.resume(throwing: error)
                     }
                 }
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                throw ACPClientError.timeout
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
         }
     }
 
@@ -765,8 +777,20 @@ final class ACPClient: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if let data, !data.isEmpty { self.receiveBuffer.append(data); self.processBuffer() }
-                if error != nil || isComplete {
-                    self.handleTransportDrop()
+                if let error {
+                    if self.sessionReady {
+                        self.handleTransportDrop()
+                    } else {
+                        self.fail("Agent connection closed: \(error.localizedDescription)")
+                    }
+                    return
+                }
+                if isComplete {
+                    if self.sessionReady {
+                        self.handleTransportDrop()
+                    } else {
+                        self.fail("Agent closed the connection during setup")
+                    }
                     return
                 }
                 self.receiveLoop()
@@ -792,6 +816,8 @@ final class ACPClient: ObservableObject {
     private func handleLine(_ line: String) {
         if let waiter = lineWaiter {
             lineWaiter = nil
+            lineTimeoutTask?.cancel()
+            lineTimeoutTask = nil
             waiter.resume(returning: line)
             return
         }
@@ -1110,7 +1136,7 @@ enum ACPClientError: LocalizedError, Equatable {
         case .notConnected: return "Not connected"
         case .encodeFailed: return "Failed to encode request"
         case .handshakeFailed(let m): return m
-        case .pairingRequired: return "Paste the Secret from `grok agent serve`"
+        case .pairingRequired: return "Paste the PIN printed by `agent-phone`"
         case .pairingFailed(let m): return m
         case .timeout: return "Companion timed out"
         case .cancelled: return "Cancelled"

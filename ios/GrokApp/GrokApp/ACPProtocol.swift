@@ -5,9 +5,6 @@ import Foundation
 
 /// Typed JSON-RPC models for Agent Client Protocol (ACP).
 enum ACPProtocol {
-    static let xaiAPIKeyMethodID = "xai.api_key"
-    /// Official Grok Build coding model — lock after session/new so chat models (e.g. grok-4.3) are not used.
-    static let preferredBuildModelId = "grok-build-0.1"
     static let workspaceListMethod = "workspace/list"
     static let sessionsListMethod = "x.ai/sessions/list"
     static let companionMermaidRenderMethod = "x.ai/companion/mermaid_render"
@@ -166,17 +163,6 @@ enum ACPProtocol {
                     "writeTextFile": .bool(false),
                 ]),
             ]),
-        ])
-    }
-
-    static func authenticateParams(apiKey: String?) -> JSONValue {
-        var meta: [String: JSONValue] = [:]
-        if let apiKey, !apiKey.isEmpty {
-            meta["xaiApiKey"] = .string(apiKey)
-        }
-        return .object([
-            "methodId": .string(xaiAPIKeyMethodID),
-            "_meta": .object(meta),
         ])
     }
 

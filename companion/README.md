@@ -1,11 +1,23 @@
-# Companion (legacy)
+# Provider-neutral companion
 
-Optional TCP/TLS + Bonjour bridge for LAN experiments.
+TCP/TLS + Bonjour bridge from the iOS ACP client to an ACP stdio agent.
 
-**Default path:** use official `grok agent serve` (see root [README](../README.md)).
+Codex:
 
 ```bash
-./companion/scripts/start-acp-bridge.sh --real
+./companion/scripts/agent-phone
+```
+
+Claude:
+
+```bash
+ACP_AGENT=claude ./companion/scripts/agent-phone
+```
+
+Local Ollama model through OpenCode:
+
+```bash
+ACP_AGENT=local ACP_MODEL=ollama/qwen3-coder:30b ./companion/scripts/agent-phone
 ```
 
 Stub (tests only):

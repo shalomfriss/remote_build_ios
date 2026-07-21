@@ -9,12 +9,12 @@ enum CompanionConfig {
         var host: String
         var port: Int
         var useTLS: Bool
-        /// Official `grok agent serve` WebSocket (pro path). When false, legacy TCP+TLS bridge.
+        /// Legacy direct WebSocket mode. The provider-neutral bridge uses TCP+TLS.
         var useWebSocket: Bool
     }
 
     static let defaultPort = 7391
-    /// Official `grok agent serve` default bind port.
+    /// Legacy Grok WebSocket bind port.
     static let defaultWebSocketPort = 2419
     static let bonjourType = "_grok-build._tcp"
     static let bonjourName = "Grok Build"
@@ -90,22 +90,24 @@ enum CompanionConfig {
     }
 
     static func resolved() -> Endpoint {
-        let useWS = UserDefaults.standard.object(forKey: wsKey) as? Bool ?? true
+        // The app now always uses the provider-neutral bridge. Ignore older
+        // installations' saved Grok WebSocket preference.
+        let useWS = false
         let useTLS = UserDefaults.standard.object(forKey: tlsKey) as? Bool
         let host = UserDefaults.standard.string(forKey: hostKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedPort = UserDefaults.standard.integer(forKey: portKey)
         let resolvedHost = host.isEmpty ? "127.0.0.1" : host
-        let local = resolvedHost == "127.0.0.1" || resolvedHost == "localhost" || resolvedHost == "::1"
         let defaultPort = useWS ? defaultWebSocketPort : defaultPort
+        let migratedPort = storedPort == defaultWebSocketPort ? Self.defaultPort : storedPort
         return Endpoint(
             host: resolvedHost,
-            port: storedPort > 0 ? storedPort : defaultPort,
-            useTLS: useWS ? false : (useTLS ?? !local),
+            port: migratedPort > 0 ? migratedPort : defaultPort,
+            useTLS: useWS ? false : (useTLS ?? true),
             useWebSocket: useWS
         )
     }
 
-    static func save(host: String, port: Int, useTLS: Bool = false, useWebSocket: Bool = true) {
+    static func save(host: String, port: Int, useTLS: Bool = true, useWebSocket: Bool = false) {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         UserDefaults.standard.set(h, forKey: hostKey)
         UserDefaults.standard.set(port > 0 ? port : (useWebSocket ? defaultWebSocketPort : defaultPort), forKey: portKey)
@@ -117,7 +119,7 @@ enum CompanionConfig {
         !resolved().host.isEmpty
     }
 
-    /// Saved Secret from `grok agent serve` (stored in GROK_PAIR_PIN for compatibility).
+    /// Saved bridge pairing PIN (stored under the original compatibility key).
     static var hasSavedSecret: Bool {
         !savedPIN.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

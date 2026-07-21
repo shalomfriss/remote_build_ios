@@ -55,7 +55,7 @@ final class AppModel: ObservableObject {
     var theme: GrokTheme { GrokTheme.load(named: themeName) }
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
 
-    /// Official path: `grok agent serve` Secret + host. Legacy Bonjour bridge is advanced-only.
+    /// Provider-neutral ACP bridge endpoint and pairing PIN.
     var canStartSession: Bool {
         if preferredBonjourEndpoint != nil {
             return CompanionConfig.hasSavedSecret
@@ -466,25 +466,14 @@ final class AppModel: ObservableObject {
         connectionPhase = .idle
     }
 
-    /// Connect with Secret from `grok agent serve` (legacy Bonjour bridge: 6-digit PIN in Advanced).
+    /// Connect to the provider-neutral ACP bridge with its six-digit pairing PIN.
     func connectWithPINAndVerify() {
         let secret = pairPinDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard secret.count >= 4 else {
-            let msg = "Paste the Secret from `grok agent serve`."
+            let msg = "Paste the PIN printed by `agent-phone`."
             setupError = msg
             connectionPhase = .failed(msg)
             return
-        }
-
-        let trimmedKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedKey.isEmpty {
-            do {
-                try KeychainHelper.saveAPIKey(trimmedKey)
-            } catch {
-                setupError = error.localizedDescription
-                connectionPhase = .failed(error.localizedDescription)
-                return
-            }
         }
 
         if preferredBonjourEndpoint == nil {
@@ -492,12 +481,11 @@ final class AppModel: ObservableObject {
                 acpHostDraft = "127.0.0.1"
             }
             if acpPortDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                acpPortDraft = String(CompanionConfig.defaultWebSocketPort)
+                acpPortDraft = String(CompanionConfig.defaultPort)
             }
-            let port = Int(acpPortDraft) ?? CompanionConfig.defaultWebSocketPort
+            let port = Int(acpPortDraft) ?? CompanionConfig.defaultPort
             let host = acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Primary path: official WebSocket serve (Secret = server-key).
-            CompanionConfig.save(host: host, port: port, useTLS: false, useWebSocket: true)
+            CompanionConfig.save(host: host, port: port, useTLS: true, useWebSocket: false)
             acp.setPreferredEndpoint(nil)
         } else {
             // Legacy Bonjour TCP+TLS bridge peers.
@@ -556,7 +544,7 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         let msg = acp.lastError
-            ?? "Could not reach agent — is `grok agent serve` running?"
+            ?? "Could not reach agent — is `agent-phone` running?"
         connectionPhase = .failed(msg)
         setupError = msg
         acp.disconnect()
@@ -585,9 +573,9 @@ final class AppModel: ObservableObject {
 
     func saveManualCompanion() {
         let port = Int(acpPortDraft.trimmingCharacters(in: .whitespacesAndNewlines))
-            ?? CompanionConfig.defaultWebSocketPort
+            ?? CompanionConfig.defaultPort
         let host = acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        CompanionConfig.save(host: host, port: port, useTLS: false, useWebSocket: true)
+        CompanionConfig.save(host: host, port: port, useTLS: true, useWebSocket: false)
         preferredBonjourEndpoint = nil
         acp.setPreferredEndpoint(nil)
     }
