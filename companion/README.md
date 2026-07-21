@@ -8,6 +8,16 @@ Codex:
 ./companion/scripts/agent-phone
 ```
 
+Remote access through ngrok (the bridge's TLS + PIN protection remains active):
+
+```bash
+./companion/scripts/agent-phone --ngrok
+```
+
+Paste the printed `tcp://...` endpoint into the app's Advanced host field and
+paste the PIN normally. To keep the same public address between runs, reserve a
+TCP address in ngrok and pass `--ngrok-url host:port` or set `GROK_NGROK_URL`.
+
 Claude:
 
 ```bash

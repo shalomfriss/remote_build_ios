@@ -18,12 +18,21 @@ ADVERTISE=1
 NO_TLS=0
 NO_PAIR=0
 DNS_PID=""
+BRIDGE_PID=""
+NGROK_PID=""
+NGROK_LOG=""
+USE_NGROK=0
+NGROK_URL="${GROK_NGROK_URL:-}"
 
 usage() {
   cat <<'EOF'
 Usage: start-acp-bridge.sh [options]
 
 Starts the TLS ACP bridge for the iOS app. Prints PIN + cert fingerprint on start.
+
+Remote access:
+  --ngrok                    Expose the TLS bridge through an ngrok TCP endpoint
+  --ngrok-url ADDRESS        Use a reserved ngrok TCP address (also GROK_NGROK_URL)
 
 Agent options:
   --agent codex|claude|local   ACP backend (default: codex)
@@ -33,9 +42,14 @@ EOF
 }
 
 cleanup() {
+  [[ -n "$BRIDGE_PID" ]] && kill -0 "$BRIDGE_PID" 2>/dev/null && kill "$BRIDGE_PID" 2>/dev/null || true
+  [[ -n "$NGROK_PID" ]] && kill -0 "$NGROK_PID" 2>/dev/null && kill "$NGROK_PID" 2>/dev/null || true
   [[ -n "$DNS_PID" ]] && kill -0 "$DNS_PID" 2>/dev/null && kill "$DNS_PID" 2>/dev/null || true
+  [[ -n "$NGROK_LOG" ]] && rm -f "$NGROK_LOG"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --agent) AGENT="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --agent-command) AGENT_COMMAND="$2"; shift 2 ;;
+    --ngrok) USE_NGROK=1; shift ;;
+    --ngrok-url) USE_NGROK=1; NGROK_URL="$2"; shift 2 ;;
     --no-tls) NO_TLS=1; shift ;;
     --no-pair) NO_PAIR=1; shift ;;
     --no-advertise) ADVERTISE=0; shift ;;
@@ -97,4 +113,58 @@ fi
 
 echo "[start-acp-bridge] workspace=${GROK_COMPANION_CWD}"
 echo "[start-acp-bridge] agent=${AGENT}${MODEL:+ model=${MODEL}}"
-exec python3 "$BRIDGE_PY" "${ARGS[@]}"
+
+if [[ "$USE_NGROK" -eq 1 ]]; then
+  if ! command -v ngrok >/dev/null 2>&1; then
+    echo "[start-acp-bridge] ERROR: ngrok is not installed (https://ngrok.com/download)" >&2
+    exit 1
+  fi
+
+  NGROK_LOG="$(mktemp -t grok-build-ngrok.XXXXXX)"
+  NGROK_ARGS=(tcp "127.0.0.1:${PORT}" --name grok-build-acp --log stdout --log-format json)
+  [[ -n "$NGROK_URL" ]] && NGROK_ARGS+=(--url "$NGROK_URL")
+  ngrok "${NGROK_ARGS[@]}" >"$NGROK_LOG" 2>&1 &
+  NGROK_PID=$!
+
+  NGROK_ENDPOINT=""
+  for _ in {1..150}; do
+    NGROK_ENDPOINT="$(python3 - "$NGROK_LOG" <<'PY'
+import json
+import sys
+
+try:
+    lines = open(sys.argv[1], encoding="utf-8").readlines()
+except OSError:
+    lines = []
+for line in reversed(lines):
+    try:
+        endpoint = json.loads(line).get("url", "")
+    except json.JSONDecodeError:
+        continue
+    if endpoint.startswith("tcp://"):
+        print(endpoint)
+        break
+PY
+)"
+    [[ -n "$NGROK_ENDPOINT" ]] && break
+    if ! kill -0 "$NGROK_PID" 2>/dev/null; then
+      echo "[start-acp-bridge] ERROR: ngrok stopped before creating a tunnel" >&2
+      tail -n 10 "$NGROK_LOG" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+
+  if [[ -z "$NGROK_ENDPOINT" ]]; then
+    echo "[start-acp-bridge] ERROR: timed out waiting for the ngrok endpoint" >&2
+    tail -n 10 "$NGROK_LOG" >&2
+    exit 1
+  fi
+
+  echo "[start-acp-bridge] ngrok endpoint: ${NGROK_ENDPOINT}"
+  echo "[start-acp-bridge] paste that endpoint and the PIN into the iOS app"
+fi
+
+python3 "$BRIDGE_PY" "${ARGS[@]}" &
+BRIDGE_PID=$!
+wait "$BRIDGE_PID"

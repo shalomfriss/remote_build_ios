@@ -13,6 +13,11 @@ enum CompanionConfig {
         var useWebSocket: Bool
     }
 
+    struct RemoteAddress: Equatable {
+        var host: String
+        var port: Int
+    }
+
     static let defaultPort = 7391
     /// Legacy Grok WebSocket bind port.
     static let defaultWebSocketPort = 2419
@@ -113,6 +118,25 @@ enum CompanionConfig {
         UserDefaults.standard.set(port > 0 ? port : (useWebSocket ? defaultWebSocketPort : defaultPort), forKey: portKey)
         UserDefaults.standard.set(useTLS, forKey: tlsKey)
         UserDefaults.standard.set(useWebSocket, forKey: wsKey)
+    }
+
+    /// Parses the `tcp://host:port` endpoint printed by `agent-phone --ngrok`.
+    static func parseRemoteAddress(_ value: String) -> RemoteAddress? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "tcp://\(trimmed)"
+        guard let components = URLComponents(string: candidate),
+              components.scheme?.lowercased() == "tcp",
+              let host = components.host,
+              !host.isEmpty,
+              let port = components.port,
+              (1...65_535).contains(port),
+              components.path.isEmpty || components.path == "/",
+              components.query == nil,
+              components.fragment == nil else {
+            return nil
+        }
+        return RemoteAddress(host: host, port: port)
     }
 
     static var hasHost: Bool {

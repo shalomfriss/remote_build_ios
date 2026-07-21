@@ -477,6 +477,10 @@ final class AppModel: ObservableObject {
         }
 
         if preferredBonjourEndpoint == nil {
+            if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
+                acpHostDraft = remote.host
+                acpPortDraft = String(remote.port)
+            }
             if acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 acpHostDraft = "127.0.0.1"
             }
@@ -572,6 +576,10 @@ final class AppModel: ObservableObject {
     }
 
     func saveManualCompanion() {
+        if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
+            acpHostDraft = remote.host
+            acpPortDraft = String(remote.port)
+        }
         let port = Int(acpPortDraft.trimmingCharacters(in: .whitespacesAndNewlines))
             ?? CompanionConfig.defaultPort
         let host = acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
