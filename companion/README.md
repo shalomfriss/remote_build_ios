@@ -9,8 +9,11 @@ Codex:
 ```
 
 `agent-phone` also boots an iOS Simulator, builds and launches Grok Build, and
-starts the pinned `serve-sim` preview. Pass `--no-simulator` to run only the ACP
-bridge, or set `GROK_SIMULATOR_DEVICE` to a simulator name or UDID.
+starts the pinned `serve-sim` preview. Its LAN URL is sent to the connected phone
+for the Simulator tab. The phone and Mac must be on the same trusted network;
+set `GROK_SIMULATOR_ADVERTISE_HOST` if automatic LAN-address discovery chooses
+the wrong interface. Pass `--no-simulator` to run only the ACP bridge, or set
+`GROK_SIMULATOR_DEVICE` to a simulator name or UDID.
 
 Remote access through ngrok (the bridge's TLS + PIN protection remains active):
 

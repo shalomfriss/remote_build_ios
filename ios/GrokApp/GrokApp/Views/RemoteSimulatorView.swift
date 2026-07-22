@@ -25,9 +25,7 @@ struct RemoteSimulatorView: View {
         }
         .background(model.theme.bgBase)
         .task {
-            if model.simulatorURL == nil {
-                await model.refreshSimulatorURL()
-            }
+            await model.refreshSimulatorURL()
         }
     }
 }
