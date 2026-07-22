@@ -45,6 +45,7 @@ final class ACPClient: ObservableObject {
     var onTransportLost: (() -> Void)?
 
     private var preserveSessionIdOnReconnect: String?
+    private var preserveSessionCwdOnReconnect: String?
     private var receiveLoopActive = false
 
     private(set) var chrome = SessionChrome()
@@ -138,8 +139,9 @@ final class ACPClient: ObservableObject {
     }
 
     /// Drop transport and reconnect; optionally resume the prior ACP session.
-    func reconnect(preserveSessionId sessionId: String?) {
+    func reconnect(preserveSessionId sessionId: String?, cwd: String? = nil) {
         preserveSessionIdOnReconnect = sessionId
+        preserveSessionCwdOnReconnect = cwd
         teardownTransport()
         connect()
     }
@@ -211,6 +213,7 @@ final class ACPClient: ObservableObject {
 
     func disconnect() {
         preserveSessionIdOnReconnect = nil
+        preserveSessionCwdOnReconnect = nil
         teardownTransport()
         sessionId = nil
     }
@@ -289,17 +292,21 @@ final class ACPClient: ObservableObject {
         guard isPaired else { return [] }
         do {
             let resp = try await sendRPC(
-                method: "x.ai/session/list",
+                method: ACPProtocol.sessionListMethod,
                 params: .object([:])
             )
-            guard let result = resp.result else { return [] }
-            let payload = result["data"]?.objectValue ?? result.objectValue ?? [:]
-            guard let sessions = payload["sessions"]?.arrayValue ?? result["sessions"]?.arrayValue else {
+            return parseSessionListResponse(resp)
+        } catch {
+            // Compatibility with the original xAI extension.
+            do {
+                let response = try await sendRPC(
+                    method: ACPProtocol.legacySessionListMethod,
+                    params: .object([:])
+                )
+                return parseSessionListResponse(response)
+            } catch {
                 return []
             }
-            return sessions.compactMap { parseSessionListEntry($0) }
-        } catch {
-            return []
         }
     }
 
@@ -320,14 +327,25 @@ final class ACPClient: ObservableObject {
         }
     }
 
-    func loadSession(_ sessionId: String) async throws {
-        _ = try await sendRPC(
-            method: "session/load",
-            params: ACPProtocol.sessionLoadParams(sessionId: sessionId)
+    func loadSession(_ sessionId: String, cwd: String? = nil) async throws {
+        let response = try await sendRPC(
+            method: ACPProtocol.sessionLoadMethod,
+            params: ACPProtocol.sessionLoadParams(sessionId: sessionId, cwd: cwd)
         )
         self.sessionId = sessionId
         sessionReady = true
         chrome.sessionId = sessionId
+        if let cwd, cwd.hasPrefix("/") {
+            chrome.cwd = cwd
+        }
+        if let modelID = response.result?["models"]?["currentModelId"]?.stringValue {
+            currentModelId = modelID
+            chrome.modelId = modelID
+            onModelChanged?(modelID)
+        }
+        if let result = response.result?.objectValue {
+            applyContextWindow(from: result)
+        }
         publishChrome()
         await refreshSessionInfo()
         await refreshBilling()
@@ -399,10 +417,13 @@ final class ACPClient: ObservableObject {
         guard case .object(let obj) = value else { return nil }
         let id = obj["sessionId"]?.stringValue ?? obj["session_id"]?.stringValue
         guard let id, !id.isEmpty else { return nil }
+        let standardTitle = obj["title"]?.stringValue ?? ""
         let summary = obj["summary"]?.stringValue ?? ""
         let firstPrompt = obj["firstPrompt"]?.stringValue ?? obj["first_prompt"]?.stringValue ?? ""
         let title: String
-        if !summary.isEmpty {
+        if !standardTitle.isEmpty {
+            title = standardTitle
+        } else if !summary.isEmpty {
             title = summary
         } else if !firstPrompt.isEmpty {
             title = String(firstPrompt.prefix(80))
@@ -411,6 +432,13 @@ final class ACPClient: ObservableObject {
         }
         let cwd = obj["cwd"]?.stringValue ?? ""
         return SessionListEntry(id: id, title: title, cwd: cwd)
+    }
+
+    private func parseSessionListResponse(_ response: ACPProtocol.JSONRPCResponse) -> [SessionListEntry] {
+        guard let result = response.result else { return [] }
+        let payload = result["data"]?.objectValue ?? result.objectValue ?? [:]
+        let sessions = payload["sessions"]?.arrayValue ?? result["sessions"]?.arrayValue ?? []
+        return sessions.compactMap { parseSessionListEntry($0) }
     }
 
     private func parseRosterEntry(_ value: ACPProtocol.JSONValue) -> RosterSessionEntry? {
@@ -518,8 +546,10 @@ final class ACPClient: ObservableObject {
             )
 
             if let resumeId = preserveSessionIdOnReconnect, !resumeId.isEmpty {
+                let resumeCwd = preserveSessionCwdOnReconnect
                 preserveSessionIdOnReconnect = nil
-                try await loadSession(resumeId)
+                preserveSessionCwdOnReconnect = nil
+                try await loadSession(resumeId, cwd: resumeCwd)
             } else {
                 let sessionResp = try await sendRPC(method: "session/new", params: ACPProtocol.sessionNewParams())
                 guard let result = sessionResp.result,

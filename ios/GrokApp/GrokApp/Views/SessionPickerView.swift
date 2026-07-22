@@ -31,6 +31,20 @@ struct SessionPickerView: View {
                     .font(.body.monospaced())
                     .foregroundStyle(theme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = model.sessionListError {
+                VStack(spacing: 12) {
+                    Text(error)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(theme.accentError)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task { await model.refreshSessionList() }
+                    }
+                    .font(.body.monospaced())
+                    .foregroundStyle(theme.textPrimary)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.sessionListEntries.isEmpty {
                 Text("No sessions")
                     .font(.body.monospaced())
@@ -41,7 +55,7 @@ struct SessionPickerView: View {
                     VStack(spacing: 0) {
                         ForEach(model.sessionListEntries) { entry in
                             Button {
-                                model.resumeSession(id: entry.id)
+                                model.resumeSession(id: entry.id, cwd: entry.cwd)
                             } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(entry.title)

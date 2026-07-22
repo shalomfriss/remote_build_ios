@@ -34,4 +34,13 @@ final class ACPProtocolTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ACPProtocol.JSONValue.self, from: data)
         XCTAssertEqual(decoded["sessionId"]?.stringValue, "sess-1")
     }
+
+    func testSessionLoadUsesSelectedAbsoluteWorkingDirectory() {
+        let params = ACPProtocol.sessionLoadParams(
+            sessionId: "session-1",
+            cwd: "/tmp/project"
+        )
+        XCTAssertEqual(params["sessionId"]?.stringValue, "session-1")
+        XCTAssertEqual(params["cwd"]?.stringValue, "/tmp/project")
+    }
 }

@@ -6,6 +6,9 @@ import Foundation
 /// Typed JSON-RPC models for Agent Client Protocol (ACP).
 enum ACPProtocol {
     static let workspaceListMethod = "workspace/list"
+    static let sessionListMethod = "session/list"
+    static let legacySessionListMethod = "x.ai/session/list"
+    static let sessionLoadMethod = "session/load"
     static let sessionsListMethod = "x.ai/sessions/list"
     static let companionMermaidRenderMethod = "x.ai/companion/mermaid_render"
     static let companionConfigGetMethod = "x.ai/companion/config_get"
@@ -226,10 +229,12 @@ enum ACPProtocol {
         )
     }
 
-    static func sessionLoadParams(sessionId: String) -> JSONValue {
-        .object([
+    static func sessionLoadParams(sessionId: String, cwd: String? = nil) -> JSONValue {
+        let requestedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let absoluteCwd = requestedCwd.hasPrefix("/") ? requestedCwd : CompanionConfig.workspaceCwd()
+        return .object([
             "sessionId": .string(sessionId),
-            "cwd": .string("."),
+            "cwd": .string(absoluteCwd),
             "mcpServers": .array([]),
         ])
     }
