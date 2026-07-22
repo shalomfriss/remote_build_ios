@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     @Published var fileFilter: String = ""
     @Published var sessionListEntries: [SessionListEntry] = []
     @Published var isLoadingSessions = false
+    @Published var sessionListError: String?
     @Published var showTimestamps: Bool = AppSettings.showTimestamps
     @Published var showThinkingBlocks: Bool = AppSettings.showThinkingBlocks
     /// Upstream dashboard roster from `x.ai/sessions/list` (falls back to session/list).
@@ -52,6 +53,7 @@ final class AppModel: ObservableObject {
     private var acpBagForward: AnyCancellable?
     private var browserBagForward: AnyCancellable?
     private var isReconnecting = false
+    private var resumeTask: Task<Void, Never>?
 
     var theme: GrokTheme { GrokTheme.load(named: themeName) }
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
@@ -420,32 +422,60 @@ final class AppModel: ObservableObject {
 
     func refreshSessionList() async {
         isLoadingSessions = true
+        sessionListError = nil
         defer { isLoadingSessions = false }
-        if !acp.isConnected {
+        if !acp.sessionReady {
             acp.connect()
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            let deadline = Date.now.addingTimeInterval(15)
+            while Date.now < deadline, !acp.sessionReady {
+                if Task.isCancelled { return }
+                if let error = acp.lastError, !error.isEmpty {
+                    sessionListError = error
+                    sessionListEntries = []
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        guard acp.sessionReady else {
+            sessionListError = "Timed out connecting to the agent"
+            sessionListEntries = []
+            return
         }
         sessionListEntries = await acp.listSessions()
     }
 
-    func resumeSession(id: String) {
+    func resumeSession(id: String, cwd: String? = nil) {
         guard canStartSession else { showOnboarding(); return }
         screen = .agent
-        acp.disconnect()
         acp.tracker.reset()
         if let preferredBonjourEndpoint {
             acp.setPreferredEndpoint(preferredBonjourEndpoint)
         } else {
             acp.setPreferredEndpoint(nil)
         }
-        acp.connect()
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            do {
-                try await self.acp.loadSession(id)
-            } catch {
-                self.acp.tracker.appendError(error.localizedDescription)
+        reconnectBanner = "Resuming session…"
+        acp.reconnect(preserveSessionId: id, cwd: cwd)
+        resumeTask?.cancel()
+        resumeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let deadline = Date.now.addingTimeInterval(30)
+            while Date.now < deadline {
+                if Task.isCancelled { return }
+                if self.acp.sessionReady, self.acp.sessionId == id {
+                    self.reconnectBanner = nil
+                    return
+                }
+                if let error = self.acp.lastError, !error.isEmpty {
+                    self.reconnectBanner = "Resume failed: \(error)"
+                    self.acp.tracker.appendError(error)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
             }
+            let message = "Resume timed out"
+            self.reconnectBanner = message
+            self.acp.tracker.appendError(message)
         }
     }
 
