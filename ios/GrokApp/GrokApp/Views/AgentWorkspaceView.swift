@@ -8,16 +8,20 @@ struct AgentWorkspaceView: View {
     @State private var selectedTab = WorkspaceTab.speech
 
     var body: some View {
-        ZStack {
-            if selectedTab == .speech {
-                AgentSessionView()
-            } else {
-                RemoteSimulatorView()
-            }
+        TabView(selection: $selectedTab) {
+            AgentSessionView()
+                .tabItem {
+                    Label("Speech", systemImage: "waveform")
+                }
+                .tag(WorkspaceTab.speech)
+
+            RemoteSimulatorView()
+                .tabItem {
+                    Label("Simulator", systemImage: "iphone")
+                }
+                .tag(WorkspaceTab.simulator)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            WorkspaceTabBar(selection: $selectedTab, theme: model.theme)
-        }
+        .tint(model.theme.textPrimary)
         .onChange(of: selectedTab) { _, tab in
             guard tab == .simulator else { return }
             model.isPromptFocused = false
