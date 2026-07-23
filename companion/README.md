@@ -25,7 +25,9 @@ Paste the printed `tcp://...` endpoint into the app's Advanced host field and
 paste the PIN normally. To keep the same public address between runs, reserve a
 TCP address in ngrok and pass `--ngrok-url host:port` or set `GROK_NGROK_URL`.
 With `--ngrok`, the serve-sim web preview is also exposed over HTTPS and sent
-to the connected iOS app automatically.
+to the connected iOS app automatically. If that HTTP tunnel is unavailable or
+over its bandwidth limit, `agent-phone` falls back to the LAN preview and prints
+a warning.
 
 Claude:
 

@@ -5,19 +5,23 @@ import SwiftUI
 
 struct AgentWorkspaceView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var selectedTab = WorkspaceTab.speech
 
     var body: some View {
-        TabView {
-            AgentSessionView()
-                .tabItem {
-                    Label("Speech", systemImage: "waveform")
-                }
-
-            RemoteSimulatorView()
-                .tabItem {
-                    Label("Simulator", systemImage: "iphone")
-                }
+        ZStack {
+            if selectedTab == .speech {
+                AgentSessionView()
+            } else {
+                RemoteSimulatorView()
+            }
         }
-        .tint(model.theme.textPrimary)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            WorkspaceTabBar(selection: $selectedTab, theme: model.theme)
+        }
+        .onChange(of: selectedTab) { _, tab in
+            guard tab == .simulator else { return }
+            model.isPromptFocused = false
+            Task { await model.refreshSimulatorURL() }
+        }
     }
 }

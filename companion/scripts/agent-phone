@@ -77,8 +77,11 @@ then
   echo "agent-phone: port ${SIMULATOR_PORT} is already in use; set GROK_SIMULATOR_PORT to another port" >&2
   exit 1
 fi
-SERVE_SIM_HOST="0.0.0.0"
-if [[ "$USE_NGROK" -eq 1 ]]; then
+LAN_SIMULATOR_URL=""
+if LAN_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" \
+  --port "$SIMULATOR_PORT" 2>/dev/null)"; then
+  SERVE_SIM_HOST="0.0.0.0"
+else
   SERVE_SIM_HOST="127.0.0.1"
 fi
 npx --yes "serve-sim@${SERVE_SIM_VERSION}" "$SIM_UDID" \
@@ -121,10 +124,22 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
     echo "agent-phone: timed out waiting for the serve-sim ngrok endpoint" >&2
     exit 1
   fi
-  export GROK_SIMULATOR_URL="$REMOTE_SIMULATOR_URL"
+  if curl --silent --fail --max-time 10 --output /dev/null \
+    --header "ngrok-skip-browser-warning: true" "${REMOTE_SIMULATOR_URL}/api"; then
+    export GROK_SIMULATOR_URL="$REMOTE_SIMULATOR_URL"
+  elif [[ -n "$LAN_SIMULATOR_URL" ]]; then
+    echo "agent-phone: simulator ngrok endpoint is unhealthy; using LAN preview instead" >&2
+    export GROK_SIMULATOR_URL="$LAN_SIMULATOR_URL"
+  else
+    echo "agent-phone: simulator ngrok endpoint is unhealthy and no LAN address is available" >&2
+    exit 1
+  fi
 else
-  export GROK_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" \
-    --port "$SIMULATOR_PORT")"
+  if [[ -z "$LAN_SIMULATOR_URL" ]]; then
+    python3 "$ROOT/companion/scripts/phone_endpoint.py" --port "$SIMULATOR_PORT"
+    exit 1
+  fi
+  export GROK_SIMULATOR_URL="$LAN_SIMULATOR_URL"
 fi
 
 echo "agent-phone: simulator=${SIM_NAME} (${SIM_UDID})"

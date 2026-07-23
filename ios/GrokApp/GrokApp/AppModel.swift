@@ -466,6 +466,7 @@ final class AppModel: ObservableObject {
             while Date.now < deadline {
                 if Task.isCancelled { return }
                 if self.acp.sessionReady, self.acp.sessionId == id {
+                    self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
                 }
