@@ -94,21 +94,21 @@ struct PromptBar: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: focusPrompt)
         }
-        .onAppear { focusPrompt() }
         .onChange(of: fieldFocused) { _, focused in
-            isFocused = focused
+            if isFocused != focused {
+                isFocused = focused
+            }
         }
         .onChange(of: isFocused) { _, focused in
-            if focused { focusPrompt() }
+            if fieldFocused != focused {
+                fieldFocused = focused
+            }
         }
     }
 
     private func focusPrompt() {
-        fieldFocused = false
-        DispatchQueue.main.async {
-            fieldFocused = true
-            isFocused = true
-        }
+        isFocused = true
+        fieldFocused = true
     }
 }
 

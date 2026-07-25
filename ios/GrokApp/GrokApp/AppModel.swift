@@ -372,6 +372,7 @@ final class AppModel: ObservableObject {
         guard screen == .agent || screen == .dashboard else { return }
         guard !acp.sessionReady else {
             reconnectBanner = nil
+            Task { simulatorURL = await acp.fetchSimulatorURL() }
             return
         }
         guard !isReconnecting else { return }
@@ -384,6 +385,7 @@ final class AppModel: ObservableObject {
             let deadline = Date().addingTimeInterval(20)
             while Date() < deadline {
                 if self.acp.sessionReady {
+                    self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
                 }
@@ -399,6 +401,7 @@ final class AppModel: ObservableObject {
 
     private func handleTransportLost() {
         guard screen == .agent || screen == .dashboard else { return }
+        simulatorURL = nil
         reconnectBanner = "Disconnected — reconnecting…"
         reconnectTransportIfNeeded()
     }
@@ -463,6 +466,7 @@ final class AppModel: ObservableObject {
             while Date.now < deadline {
                 if Task.isCancelled { return }
                 if self.acp.sessionReady, self.acp.sessionId == id {
+                    self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
                 }
