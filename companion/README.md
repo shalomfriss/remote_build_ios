@@ -15,6 +15,12 @@ set `GROK_SIMULATOR_ADVERTISE_HOST` if automatic LAN-address discovery chooses
 the wrong interface. Pass `--no-simulator` to run only the ACP bridge, or set
 `GROK_SIMULATOR_DEVICE` to a simulator name or UDID.
 
+Each new phone workstream gets a fresh SwiftUI Xcode project under `~/.projects`.
+Change the root with `--projects-root /path/to/projects` or the
+`GROK_PROJECTS_ROOT` environment variable. After a successful agent turn, the
+companion builds that workstream's iOS app, installs and launches it in the
+Simulator, and keeps it available in the phone's Simulator tab.
+
 Remote access through ngrok (the bridge's TLS + PIN protection remains active):
 
 ```bash

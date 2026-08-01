@@ -47,6 +47,8 @@ final class AppModel: ObservableObject {
     /// Shown in agent chrome when transport drops and reconnect is in progress.
     @Published var reconnectBanner: String?
     @Published var simulatorURL: URL?
+    @Published var simulatorBuildStatus: String?
+    @Published var simulatorBuildError: String?
 
     let acp = ACPClient()
     let companionBrowser = CompanionBrowser()
@@ -665,7 +667,17 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSimulatorURL() async {
-        simulatorURL = await acp.fetchSimulatorURL()
+        let info = await acp.fetchSimulatorInfo()
+        simulatorURL = info.url
+        simulatorBuildStatus = info.status
+        simulatorBuildError = info.error
+    }
+
+    func monitorSimulator() async {
+        while !Task.isCancelled {
+            await refreshSimulatorURL()
+            try? await Task.sleep(for: .seconds(1))
+        }
     }
 
     func startNewSession() {

@@ -9,30 +9,48 @@ struct RemoteSimulatorView: View {
     @State private var webError: String?
 
     var body: some View {
-        Group {
-            if let webError {
-                ContentUnavailableView {
-                    Label("Simulator could not load", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(webError)
-                } actions: {
-                    Button("Retry", action: retry)
+        ZStack(alignment: .top) {
+            Group {
+                if let webError {
+                    ContentUnavailableView {
+                        Label("Simulator could not load", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(webError)
+                    } actions: {
+                        Button("Retry", action: retry)
+                    }
+                } else if let url = model.simulatorURL {
+                    SimulatorWebView(url: url, error: $webError)
+                } else {
+                    ContentUnavailableView {
+                        Label("Simulator unavailable", systemImage: "iphone.slash")
+                    } description: {
+                        Text("Start agent-phone with simulator support, then reconnect.")
+                    } actions: {
+                        Button("Retry", action: retry)
+                    }
                 }
-            } else if let url = model.simulatorURL {
-                SimulatorWebView(url: url, error: $webError)
-            } else {
-                ContentUnavailableView {
-                    Label("Simulator unavailable", systemImage: "iphone.slash")
-                } description: {
-                    Text("Start agent-phone with simulator support, then reconnect.")
-                } actions: {
-                    Button("Retry", action: retry)
-                }
+            }
+
+            if model.simulatorBuildStatus == "queued" || model.simulatorBuildStatus == "building" {
+                Label("Building and launching iOS app…", systemImage: "hammer")
+                    .padding()
+                    .background(.regularMaterial, in: Capsule())
+                    .padding()
+            } else if model.simulatorBuildStatus == "failed" {
+                Label(
+                    model.simulatorBuildError ?? "The iOS app could not be built.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .foregroundStyle(.red)
+                .padding()
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .padding()
             }
         }
         .background(model.theme.bgBase)
         .task {
-            await model.refreshSimulatorURL()
+            await model.monitorSimulator()
         }
     }
 

@@ -29,7 +29,7 @@
 		B10000010000000000000014 /* slash-commands.json in Resources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000014 /* slash-commands.json */; };
 		B10000010000000000000015 /* CompanionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000016 /* CompanionConfig.swift */; };
 		B10000010000000000000016 /* companion.defaults.json in Resources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000017 /* companion.defaults.json */; };
-        B10000010000000000000018 /* CompanionBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000018 /* CompanionBrowser.swift */; };
+		B10000010000000000000018 /* CompanionBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000018 /* CompanionBrowser.swift */; };
 		B10000010000000000000019 /* ACPProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000019 /* ACPProtocol.swift */; };
 		B1000001000000000000001A /* ScrollbackTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000001A /* ScrollbackTracker.swift */; };
 		B1000001000000000000001B /* CompanionTLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000001B /* CompanionTLS.swift */; };
@@ -37,7 +37,6 @@
 		B1000001000000000000001D /* FilePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000001D /* FilePickerView.swift */; };
 		B1000001000000000000001E /* ACPProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000001E /* ACPProtocolTests.swift */; };
 		B1000001000000000000001F /* SlashCommandCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000001F /* SlashCommandCatalogTests.swift */; };
-		B1000001000000000000002B /* SessionChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002B /* SessionChromeTests.swift */; };
 		B10000010000000000000022 /* SessionChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000022 /* SessionChrome.swift */; };
 		B10000010000000000000023 /* AgentStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000023 /* AgentStatusBar.swift */; };
 		B10000010000000000000024 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000024 /* DashboardView.swift */; };
@@ -47,6 +46,7 @@
 		B10000010000000000000028 /* MarkdownLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000028 /* MarkdownLite.swift */; };
 		B10000010000000000000029 /* logo07.txt in Resources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000029 /* logo07.txt */; };
 		B1000001000000000000002A /* WelcomeLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002A /* WelcomeLogoView.swift */; };
+		B1000001000000000000002B /* SessionChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002B /* SessionChromeTests.swift */; };
 		B1000001000000000000002C /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002C /* AppSettings.swift */; };
 		B1000001000000000000002D /* FormatDuration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002D /* FormatDuration.swift */; };
 		B1000001000000000000002E /* VerbGroupLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000002E /* VerbGroupLogic.swift */; };
@@ -96,7 +96,7 @@
 		F10000010000000000000014 /* slash-commands.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "slash-commands.json"; sourceTree = "<group>"; };
 		F10000010000000000000015 /* GrokApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GrokApp.entitlements; sourceTree = "<group>"; };
 		F10000010000000000000016 /* CompanionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConfig.swift; sourceTree = "<group>"; };
-		F10000010000000000000017 /* companion.defaults.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "companion.defaults.json"; sourceTree = "<group>"; };
+		F10000010000000000000017 /* companion.defaults.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = companion.defaults.json; sourceTree = "<group>"; };
 		F10000010000000000000018 /* CompanionBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionBrowser.swift; sourceTree = "<group>"; };
 		F10000010000000000000019 /* ACPProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPProtocol.swift; sourceTree = "<group>"; };
 		F1000001000000000000001A /* ScrollbackTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollbackTracker.swift; sourceTree = "<group>"; };
@@ -105,7 +105,8 @@
 		F1000001000000000000001D /* FilePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePickerView.swift; sourceTree = "<group>"; };
 		F1000001000000000000001E /* ACPProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPProtocolTests.swift; sourceTree = "<group>"; };
 		F1000001000000000000001F /* SlashCommandCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashCommandCatalogTests.swift; sourceTree = "<group>"; };
-		F1000001000000000000002B /* SessionChromeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChromeTests.swift; sourceTree = "<group>"; };
+		F10000010000000000000020 /* GrokApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GrokApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000010000000000000021 /* GrokAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GrokAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F10000010000000000000022 /* SessionChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChrome.swift; sourceTree = "<group>"; };
 		F10000010000000000000023 /* AgentStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStatusBar.swift; sourceTree = "<group>"; };
 		F10000010000000000000024 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -115,6 +116,7 @@
 		F10000010000000000000028 /* MarkdownLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownLite.swift; sourceTree = "<group>"; };
 		F10000010000000000000029 /* logo07.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = logo07.txt; sourceTree = "<group>"; };
 		F1000001000000000000002A /* WelcomeLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeLogoView.swift; sourceTree = "<group>"; };
+		F1000001000000000000002B /* SessionChromeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChromeTests.swift; sourceTree = "<group>"; };
 		F1000001000000000000002C /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		F1000001000000000000002D /* FormatDuration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatDuration.swift; sourceTree = "<group>"; };
 		F1000001000000000000002E /* VerbGroupLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerbGroupLogic.swift; sourceTree = "<group>"; };
@@ -123,8 +125,6 @@
 		F10000010000000000000031 /* SessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPickerView.swift; sourceTree = "<group>"; };
 		F10000010000000000000032 /* ChangelogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangelogView.swift; sourceTree = "<group>"; };
 		F10000010000000000000033 /* 0.2.99.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 0.2.99.md; sourceTree = "<group>"; };
-		F10000010000000000000020 /* GrokApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GrokApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F10000010000000000000021 /* GrokAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GrokAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F10000010000000000000034 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
 		F10000010000000000000035 /* PagerSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagerSettingsView.swift; sourceTree = "<group>"; };
 		F10000010000000000000036 /* CompanionConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConfigTests.swift; sourceTree = "<group>"; };
@@ -261,14 +261,6 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		G10000010000000000000009 /* changelogs */ = {
-			isa = PBXGroup;
-			children = (
-				F10000010000000000000033 /* 0.2.99.md */,
-			);
-			path = changelogs;
-			sourceTree = "<group>";
-		};
 		G10000010000000000000008 /* themes */ = {
 			isa = PBXGroup;
 			children = (
@@ -276,6 +268,14 @@
 				F10000010000000000000011 /* grokday.json */,
 			);
 			path = themes;
+			sourceTree = "<group>";
+		};
+		G10000010000000000000009 /* changelogs */ = {
+			isa = PBXGroup;
+			children = (
+				F10000010000000000000033 /* 0.2.99.md */,
+			);
+			path = changelogs;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -473,7 +473,6 @@
 		C10000010000000000000002 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ORGANIZATIONNAME = "Pedro Shakour";
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -492,6 +491,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
+				ORGANIZATIONNAME = "Pedro Shakour";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -501,7 +501,6 @@
 		C10000010000000000000003 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ORGANIZATIONNAME = "Pedro Shakour";
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -513,6 +512,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
+				ORGANIZATIONNAME = "Pedro Shakour";
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
@@ -526,7 +526,7 @@
 				CODE_SIGN_ENTITLEMENTS = GrokApp/GrokApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 8NN27Z7TQR;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Grok Build";
@@ -557,7 +557,7 @@
 				CODE_SIGN_ENTITLEMENTS = GrokApp/GrokApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 8NN27Z7TQR;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Grok Build";

@@ -22,6 +22,8 @@ SIM_UDID=""
 export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
 export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$HOME/Library/Application Support/GrokBuild/state}"
+export GROK_PROJECTS_ROOT="${GROK_PROJECTS_ROOT:-$HOME/.projects}"
+export GROK_IOS_WORKSTREAMS=1
 mkdir -p "$GROK_COMPANION_CWD" "$GROK_COMPANION_STATE_DIR"
 
 while [[ $# -gt 0 ]]; do
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     --no-simulator) SIMULATOR=0; shift ;;
     --ngrok) USE_NGROK=1; FORWARD_ARGS+=("$1"); shift ;;
     --ngrok-url) USE_NGROK=1; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
+    --projects-root) export GROK_PROJECTS_ROOT="$2"; shift 2 ;;
     --port) PORT="$2"; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
     -h|--help) SIMULATOR=0; FORWARD_ARGS+=("$1"); shift ;;
     *) FORWARD_ARGS+=("$1"); shift ;;
@@ -37,6 +40,7 @@ done
 
 echo "agent-phone: ${AGENT} ACP agent ← TLS+PIN on ${HOST}:${PORT}"
 echo "agent-phone: workspace=${GROK_COMPANION_CWD}"
+echo "agent-phone: new workstreams=${GROK_PROJECTS_ROOT}"
 echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
 echo ""
 
@@ -65,6 +69,11 @@ SIM_RUNTIME_JSON="$(python3 "$ROOT/companion/scripts/simulator_runtime.py" \
   --device "${GROK_SIMULATOR_DEVICE:-}")"
 SIM_UDID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["udid"])' <<<"$SIM_RUNTIME_JSON")"
 SIM_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<<"$SIM_RUNTIME_JSON")"
+export GROK_AUTO_BUILD_IOS=1
+export GROK_SIMULATOR_UDID="$SIM_UDID"
+export GROK_IOS_DERIVED_DATA="${GROK_IOS_DERIVED_DATA:-$GROK_COMPANION_STATE_DIR/GeneratedAppDerivedData}"
+export GROK_SIMULATOR_STATE_FILE="${GROK_SIMULATOR_STATE_FILE:-$GROK_COMPANION_STATE_DIR/simulator-build.json}"
+rm -f "$GROK_SIMULATOR_STATE_FILE"
 
 SERVE_SIM_LOG="$GROK_COMPANION_STATE_DIR/serve-sim.log"
 if ! python3 - "$SIMULATOR_PORT" <<'PY'
