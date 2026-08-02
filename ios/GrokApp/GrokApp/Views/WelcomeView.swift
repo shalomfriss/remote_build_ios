@@ -10,15 +10,13 @@ struct WelcomeView: View {
 
     var body: some View {
         let theme = model.theme
-        GeometryReader { geo in
-            // Geometry can be 0 on first pass — don't hide logo briefly.
-            let height = geo.size.height > 100 ? geo.size.height : 900
+        GeometryReader { _ in
             VStack(spacing: 0) {
                 welcomeTopBar(theme: theme)
 
                 Spacer(minLength: 12)
 
-                WelcomeLogoView(theme: theme, windowHeightPoints: height)
+                WelcomeLogoView(theme: theme)
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 16)
 

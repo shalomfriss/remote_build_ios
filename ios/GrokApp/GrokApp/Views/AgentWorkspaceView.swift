@@ -31,9 +31,11 @@ struct AgentWorkspaceView: View {
                 if selectedTab == .speech {
                     if !model.isPromptFocused {
                         Button("Run", systemImage: "play.fill", action: runProject)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.regular)
-                            .frame(minHeight: 44)
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.large)
+                            .frame(minWidth: 44, minHeight: 44)
                             .disabled(!model.canRunCurrentProject)
                     }
                 } else {
@@ -43,14 +45,16 @@ struct AgentWorkspaceView: View {
                         action: showSimulatorFullScreen
                     )
                     .labelStyle(.iconOnly)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
                     .frame(minWidth: 44, minHeight: 44)
                 }
             }
-            .frame(width: 96, height: 68)
-            .padding(.trailing, 4)
+            .frame(width: 44, height: 44)
+            .padding(.trailing, 12)
             .padding(.bottom, 4)
+            .offset(y: 10)
         }
         .onChange(of: selectedTab) { _, tab in
             guard tab == .simulator else { return }
