@@ -333,9 +333,10 @@ final class ACPClient: ObservableObject {
             method: ACPProtocol.sessionLoadMethod,
             params: ACPProtocol.sessionLoadParams(sessionId: sessionId, cwd: cwd)
         )
-        self.sessionId = sessionId
+        let loadedSessionId = response.result?["sessionId"]?.stringValue ?? sessionId
+        self.sessionId = loadedSessionId
         sessionReady = true
-        chrome.sessionId = sessionId
+        chrome.sessionId = loadedSessionId
         if let cwd, cwd.hasPrefix("/") {
             chrome.cwd = cwd
         }
@@ -392,6 +393,13 @@ final class ACPClient: ObservableObject {
 
     func fetchSimulatorURL() async -> URL? {
         await fetchSimulatorInfo().url
+    }
+
+    func runSimulatorApp() async throws {
+        _ = try await sendRPC(
+            method: ACPProtocol.companionSimulatorRunMethod,
+            params: .object([:])
+        )
     }
 
     func fetchSimulatorInfo() async -> (url: URL?, status: String?, error: String?) {

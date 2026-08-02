@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "project_scaffold.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("project_scaffold", MODULE_PATH)
 assert SPEC and SPEC.loader
 PROJECT = importlib.util.module_from_spec(SPEC)
@@ -31,6 +33,9 @@ def test_creates_runnable_xcode_project_shape(tmp_path: Path) -> None:
     assert (project / "MyNewApp/ContentView.swift").is_file()
     metadata = json.loads((project / ".grok-build-project.json").read_text())
     assert metadata["name"] == "My New App"
+    registry = json.loads((tmp_path / ".grok-build-projects.json").read_text())
+    assert registry["projects"][0]["name"] == "My New App"
+    assert registry["projects"][0]["path"] == str(project)
 
 
 def test_target_name_is_a_valid_identifier() -> None:

@@ -23,6 +23,19 @@ Change the root with `--projects-root /path/to/projects` or the
 companion builds that project's iOS app, installs and launches it in the
 Simulator, and keeps it available in the phone's Simulator tab.
 
+Add an existing project to the phone's Resume Projects menu from the command
+line:
+
+```bash
+./companion/scripts/agent-phone add-project /path/to/MyApp --name "My App"
+```
+
+The name is optional; Grok Build falls back to `.grok-build-project.json`, the
+Xcode project name, or the folder name. Registrations are stored under the
+configured projects root, so use `--projects-root /path/to/projects` on the
+command or set `GROK_PROJECTS_ROOT` when using a non-default root. Selecting a
+registered project starts a new agent session in that existing directory.
+
 Remote access through ngrok (the bridge's TLS + PIN protection remains active):
 
 ```bash

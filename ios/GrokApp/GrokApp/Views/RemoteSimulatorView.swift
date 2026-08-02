@@ -61,14 +61,16 @@ struct RemoteSimulatorView: View {
                         Spacer()
                         Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: onToggleFullScreen)
                             .labelStyle(.iconOnly)
-                            .font(.body.bold())
-                            .frame(width: 44, height: 44)
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.primary)
-                            .background(.regularMaterial, in: Circle())
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.large)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
                 }
-                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.trailing, 82)
+                .padding(.bottom, 4)
+                .offset(y: 10)
             }
         }
         .background(model.theme.bgBase)
@@ -99,6 +101,10 @@ private struct SimulatorWebView: UIViewRepresentable {
                 source: """
                 const style = document.createElement('style');
                 style.textContent = `
+                    a[href*="github.com/EvanBacon/serve-sim"],
+                    a[aria-label="Open serve-sim"] {
+                        display: none !important;
+                    }
                     button[aria-label="Open WebKit DevTools"] {
                         display: none !important;
                     }
