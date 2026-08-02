@@ -237,6 +237,21 @@ def config_set(values: dict[str, Any]) -> dict[str, Any]:
     return config_get()
 
 
+def simulator_info() -> dict[str, Any]:
+    result: dict[str, Any] = {"url": os.environ.get("GROK_SIMULATOR_URL", "")}
+    state_value = os.environ.get("GROK_SIMULATOR_STATE_FILE", "").strip()
+    if not state_value:
+        return result
+    state_path = Path(state_value).expanduser()
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return result
+    if isinstance(state, dict):
+        result.update(state)
+    return result
+
+
 def handle_companion_rpc(
     msg: dict[str, Any],
     upstream: Path,
@@ -300,7 +315,7 @@ def handle_companion_rpc(
         body = {
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {"url": os.environ.get("GROK_SIMULATOR_URL", "")},
+            "result": simulator_info(),
         }
         return (json.dumps(body) + "\n").encode("utf-8")
 

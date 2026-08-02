@@ -123,3 +123,6 @@ Stub ACP (CI / no API key):
 ## License
 
 Apache-2.0. See `LICENSE`, `NOTICE`, and `THIRD-PARTY-NOTICES`.
+
+
+./companion/scripts/agent-phone --ngrok

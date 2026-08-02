@@ -46,6 +46,7 @@ final class ACPClient: ObservableObject {
 
     private var preserveSessionIdOnReconnect: String?
     private var preserveSessionCwdOnReconnect: String?
+    private var pendingProjectName: String?
     private var receiveLoopActive = false
 
     private(set) var chrome = SessionChrome()
@@ -390,16 +391,24 @@ final class ACPClient: ObservableObject {
     }
 
     func fetchSimulatorURL() async -> URL? {
-        guard isPaired else { return nil }
+        await fetchSimulatorInfo().url
+    }
+
+    func fetchSimulatorInfo() async -> (url: URL?, status: String?, error: String?) {
+        guard isPaired else { return (nil, nil, nil) }
         do {
             let response = try await sendRPC(
                 method: ACPProtocol.companionSimulatorInfoMethod,
                 params: .object([:])
             )
-            guard let value = response.result?["url"]?.stringValue else { return nil }
-            return URL(string: value)
+            let value = response.result?["url"]?.stringValue ?? ""
+            return (
+                url: URL(string: value),
+                status: response.result?["status"]?.stringValue,
+                error: response.result?["error"]?.stringValue
+            )
         } catch {
-            return nil
+            return (nil, nil, nil)
         }
     }
 
@@ -431,7 +440,14 @@ final class ACPClient: ObservableObject {
             title = "session \(id.prefix(8))"
         }
         let cwd = obj["cwd"]?.stringValue ?? ""
-        return SessionListEntry(id: id, title: title, cwd: cwd)
+        let projectName = obj["projectName"]?.stringValue
+            ?? obj["project_name"]?.stringValue
+        return SessionListEntry(
+            id: id,
+            title: title,
+            cwd: cwd,
+            projectName: projectName
+        )
     }
 
     private func parseSessionListResponse(_ response: ACPProtocol.JSONRPCResponse) -> [SessionListEntry] {
@@ -482,16 +498,20 @@ final class ACPClient: ObservableObject {
         }
     }
 
-    /// New worktree on an already-open transport — `session/new` without reconnect.
-    func startFreshSession() async {
-        guard isConnected, isPaired else {
+    /// New project on an already-open transport — `session/new` without reconnect.
+    func startFreshSession(named projectName: String) async {
+        guard isConnected, isPaired, sessionReady else {
+            pendingProjectName = projectName
             connect()
             return
         }
         isRunning = false
         pendingPrompt = nil
         do {
-            let sessionResp = try await sendRPC(method: "session/new", params: ACPProtocol.sessionNewParams())
+            let sessionResp = try await sendRPC(
+                method: "session/new",
+                params: ACPProtocol.sessionNewParams(projectName: projectName)
+            )
             guard let result = sessionResp.result,
                   let sid = result["sessionId"]?.stringValue else {
                 throw ACPClientError.handshakeFailed("No sessionId")
@@ -551,7 +571,12 @@ final class ACPClient: ObservableObject {
                 preserveSessionCwdOnReconnect = nil
                 try await loadSession(resumeId, cwd: resumeCwd)
             } else {
-                let sessionResp = try await sendRPC(method: "session/new", params: ACPProtocol.sessionNewParams())
+                let projectName = pendingProjectName
+                pendingProjectName = nil
+                let sessionResp = try await sendRPC(
+                    method: "session/new",
+                    params: ACPProtocol.sessionNewParams(projectName: projectName)
+                )
                 guard let result = sessionResp.result,
                       let sid = result["sessionId"]?.stringValue else {
                     throw ACPClientError.handshakeFailed("No sessionId")

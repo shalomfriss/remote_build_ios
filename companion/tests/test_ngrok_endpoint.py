@@ -20,3 +20,18 @@ def test_extracts_latest_endpoint_for_scheme() -> None:
 
 def test_ignores_invalid_log_lines() -> None:
     assert NGROK.endpoint_from_lines(["not json", "{}"], "tcp") is None
+
+
+def test_extracts_ngrok_error_banner() -> None:
+    banner = (
+        b"This ngrok account has reached its network bandwidth limit for the month.\r\n\r\n"
+        b"ERR_NGROK_725\r\n"
+    )
+    error = NGROK.ngrok_error_from_bytes(banner)
+    assert error is not None
+    assert "ERR_NGROK_725" in error
+    assert "bandwidth limit" in error
+
+
+def test_ignores_regular_tunnel_bytes() -> None:
+    assert NGROK.ngrok_error_from_bytes(b"regular TLS tunnel bytes") is None

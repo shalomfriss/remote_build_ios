@@ -11,6 +11,7 @@ struct ScrollbackView: View {
     var showTimestamps: Bool = AppSettings.showTimestamps
     var onToggleFold: ((UUID) -> Void)?
     var onOpenMermaid: ((String) async -> Data?)?
+    var onDismissKeyboard: (() -> Void)?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -29,6 +30,10 @@ struct ScrollbackView: View {
                 }
                 .padding(.vertical, 4)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(
+                TapGesture().onEnded { onDismissKeyboard?() }
+            )
             .onChange(of: entries.count) { _, _ in
                 if let last = entries.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }

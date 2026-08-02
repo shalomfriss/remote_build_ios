@@ -37,29 +37,25 @@ struct PromptBar: View {
                     .contentShape(Rectangle())
                     .onTapGesture(perform: focusPrompt)
 
-                ZStack(alignment: .leading) {
-                    if draft.isEmpty {
-                        Text(placeholder)
-                            .font(promptFont)
-                            .foregroundStyle(theme.textSecondary.opacity(0.55))
-                            .lineLimit(1)
-                            .allowsHitTesting(false)
+                TextField(placeholder, text: $draft)
+                    .font(promptFont)
+                    .foregroundStyle(theme.textPrimary)
+                    .tint(theme.running)
+                    .textInputAutocapitalization(.sentences)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1)
+                    .focused($fieldFocused)
+                    .submitLabel(.send)
+                    .onSubmit { sendPrompt() }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done", action: dismissKeyboard)
+                        }
                     }
-                    TextField("", text: $draft, axis: .vertical)
-                        .font(promptFont)
-                        .foregroundStyle(theme.textPrimary)
-                        .tint(theme.running)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...6)
-                        .focused($fieldFocused)
-                        .submitLabel(.send)
-                        .onSubmit { onSend() }
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
 
-                Button(action: onSend) {
+                Button(action: sendPrompt) {
                     Text("[send]")
                         .font(.caption.monospaced())
                         .foregroundStyle(canSend ? theme.accentUser : theme.textSecondary.opacity(0.45))
@@ -72,11 +68,6 @@ struct PromptBar: View {
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(theme.bgTerminal)
-            .background {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: focusPrompt)
-            }
 
             Rectangle()
                 .fill(theme.promptBorder)
@@ -109,6 +100,17 @@ struct PromptBar: View {
     private func focusPrompt() {
         isFocused = true
         fieldFocused = true
+    }
+
+    private func dismissKeyboard() {
+        fieldFocused = false
+        isFocused = false
+    }
+
+    private func sendPrompt() {
+        guard canSend else { return }
+        dismissKeyboard()
+        onSend()
     }
 }
 

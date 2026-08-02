@@ -47,6 +47,10 @@ final class AppModel: ObservableObject {
     /// Shown in agent chrome when transport drops and reconnect is in progress.
     @Published var reconnectBanner: String?
     @Published var simulatorURL: URL?
+    @Published var simulatorBuildStatus: String?
+    @Published var simulatorBuildError: String?
+    @Published var isNamingProject = false
+    @Published var projectNameDraft = ""
 
     let acp = ACPClient()
     let companionBrowser = CompanionBrowser()
@@ -217,8 +221,8 @@ final class AppModel: ObservableObject {
     }
 
     func startNewSessionFromDashboard() {
-        // Upstream `[+ New Agent]` — starts a new agent session.
-        startNewSession()
+        // Ask for the project name before dispatching a new agent.
+        requestNewProject()
     }
 
     func openDashboardRow(_ row: DashboardRowModel) {
@@ -450,6 +454,7 @@ final class AppModel: ObservableObject {
 
     func resumeSession(id: String, cwd: String? = nil) {
         guard canStartSession else { showOnboarding(); return }
+        resumeTask?.cancel()
         screen = .agent
         acp.tracker.reset()
         if let preferredBonjourEndpoint {
@@ -458,10 +463,30 @@ final class AppModel: ObservableObject {
             acp.setPreferredEndpoint(nil)
         }
         reconnectBanner = "Resuming session…"
-        acp.reconnect(preserveSessionId: id, cwd: cwd)
-        resumeTask?.cancel()
         resumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
+
+            // The session picker is populated over an already initialized ACP
+            // connection. Reuse it so Resume does not kill the working bridge and
+            // briefly expose a paired transport with no usable session.
+            if self.acp.isConnected, self.acp.isPaired, self.acp.sessionReady {
+                do {
+                    try await self.acp.loadSession(id, cwd: cwd)
+                    guard !Task.isCancelled else { return }
+                    self.simulatorURL = await self.acp.fetchSimulatorURL()
+                    self.reconnectBanner = nil
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    let message = error.localizedDescription
+                    self.reconnectBanner = "Resume failed: \(message)"
+                    self.acp.tracker.appendError(message)
+                }
+                return
+            }
+
+            // If the transport genuinely went away while the picker was open,
+            // reconnect and ask the new ACP connection to load the selected session.
+            self.acp.reconnect(preserveSessionId: id, cwd: cwd)
             let deadline = Date.now.addingTimeInterval(30)
             while Date.now < deadline {
                 if Task.isCancelled { return }
@@ -499,6 +524,13 @@ final class AppModel: ObservableObject {
         acpHostDraft = peer.name
         setupError = nil
         connectionPhase = .idle
+    }
+
+    func selectBonjourPeerIfAppropriate(from peers: [CompanionPeer]) {
+        guard preferredBonjourEndpoint == nil, let peer = peers.first else { return }
+        let host = acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard host.isEmpty || host == "127.0.0.1" || host == "localhost" else { return }
+        selectBonjourPeer(peer)
     }
 
     /// Connect to the provider-neutral ACP bridge with its six-digit pairing PIN.
@@ -552,7 +584,7 @@ final class AppModel: ObservableObject {
         showWelcome()
     }
 
-    private func verifyCompanionConnection() async {
+    private func verifyCompanionConnection(allowBonjourFallback: Bool = true) async {
         connectionPhase = .checking
         setupError = nil
         acp.disconnect()
@@ -566,6 +598,9 @@ final class AppModel: ObservableObject {
         while Date() < deadline {
             if Task.isCancelled { return }
             if let err = acp.lastError, !err.isEmpty {
+                if allowBonjourFallback, await retryWithDiscoveredCompanion(after: err) {
+                    return
+                }
                 connectionPhase = .failed(err)
                 setupError = err
                 acp.disconnect()
@@ -585,9 +620,27 @@ final class AppModel: ObservableObject {
         }
         let msg = acp.lastError
             ?? "Could not reach agent — is `agent-phone` running?"
+        if allowBonjourFallback, await retryWithDiscoveredCompanion(after: msg) {
+            return
+        }
         connectionPhase = .failed(msg)
         setupError = msg
         acp.disconnect()
+    }
+
+    private func retryWithDiscoveredCompanion(after error: String) async -> Bool {
+        guard error.localizedCaseInsensitiveContains("could not reach"),
+              preferredBonjourEndpoint == nil,
+              let peer = companionBrowser.peers.first else {
+            return false
+        }
+        acp.disconnect()
+        selectBonjourPeer(peer)
+        let pin = pairPinDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fingerprint = fingerprintDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        CompanionConfig.savePairing(pin: pin, fingerprint: fingerprint, token: nil)
+        await verifyCompanionConnection(allowBonjourFallback: false)
+        return true
     }
 
     func clearBonjourPreference() {
@@ -665,26 +718,55 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSimulatorURL() async {
-        simulatorURL = await acp.fetchSimulatorURL()
+        let info = await acp.fetchSimulatorInfo()
+        simulatorURL = info.url
+        simulatorBuildStatus = info.status
+        simulatorBuildError = info.error
     }
 
-    func startNewSession() {
-        guard canStartSession else { showOnboarding(); return }
-        draft = ""
-        // New worktree: fresh scrollback, keep transport if sessionReady; else reconnect.
-        if acp.sessionReady {
-            acp.tracker.reset()
-            messages = []
-            sessionTitle = "loading..."
-            screen = .agent
-            // Request a new ACP session on the same socket.
-            Task { await acp.startFreshSession() }
-            return
+    func monitorSimulator() async {
+        while !Task.isCancelled {
+            await refreshSimulatorURL()
+            try? await Task.sleep(for: .seconds(1))
         }
+    }
+
+    var canRunCurrentProject: Bool {
+        acp.sessionReady && !acp.isRunning
+    }
+
+    func runCurrentProject() {
+        guard canRunCurrentProject else { return }
+        let command = "Build and run the current iOS app on the configured Simulator. Do not make feature changes. Compile, install, and launch the app."
+        acp.tracker.appendUser("Run the app")
+        acp.sendPrompt(command)
+    }
+
+    func requestNewProject() {
+        guard canStartSession else { showOnboarding(); return }
+        projectNameDraft = ""
+        isNamingProject = true
+    }
+
+    var canCreateNamedProject: Bool {
+        !projectNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func createNamedProject() {
+        let name = projectNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        isNamingProject = false
+        startNewSession(named: name)
+    }
+
+    private func startNewSession(named projectName: String) {
+        draft = ""
         acp.tracker.reset()
         messages = []
         sessionTitle = "loading..."
-        showAgent()
+        screen = .agent
+        // This method also carries the name through a new connection handshake.
+        Task { await acp.startFreshSession(named: projectName) }
     }
 
     /// Upstream welcome prompt submit: type a message → enter agent session with that prompt.
@@ -702,8 +784,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Upstream welcome "Resume session" (ctrl+s) — session picker UI.
-    func resumeSessionFromWelcome() {
+    /// Welcome "Resume Project" (ctrl+s) — project picker UI.
+    func resumeProjectFromWelcome() {
         showSessionPicker()
     }
 

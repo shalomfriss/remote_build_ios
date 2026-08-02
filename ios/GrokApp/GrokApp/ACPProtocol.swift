@@ -170,12 +170,19 @@ enum ACPProtocol {
         ])
     }
 
-    static func sessionNewParams() -> JSONValue {
+    static func sessionNewParams(projectName: String? = nil) -> JSONValue {
         // Official `grok agent serve` requires an absolute cwd (relative "." → -32602).
-        .object([
+        var params: [String: JSONValue] = [
             "cwd": .string(CompanionConfig.workspaceCwd()),
             "mcpServers": .array([]),
-        ])
+        ]
+        if let projectName = projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !projectName.isEmpty {
+            // Companion-only extension. The bridge removes it before forwarding
+            // session/new to the provider.
+            params["projectName"] = .string(projectName)
+        }
+        return .object(params)
     }
 
     static func sessionSetModelParams(sessionId: String, modelId: String) -> JSONValue {

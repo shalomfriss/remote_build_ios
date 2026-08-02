@@ -145,8 +145,17 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
     exit 1
   fi
 
-  echo "[start-acp-bridge] ngrok endpoint: ${NGROK_ENDPOINT}"
-  echo "[start-acp-bridge] paste that endpoint and the PIN into the iOS app"
+  NGROK_ERROR="$(python3 "$NGROK_ENDPOINT_PY" "$NGROK_LOG" tcp --check)"
+  if [[ -n "$NGROK_ERROR" ]]; then
+    echo "[start-acp-bridge] WARNING: ngrok endpoint is unavailable: ${NGROK_ERROR}" >&2
+    echo "[start-acp-bridge] use Bonjour or the Mac's LAN address from the same Wi-Fi" >&2
+    kill "$NGROK_PID" 2>/dev/null || true
+    wait "$NGROK_PID" 2>/dev/null || true
+    NGROK_PID=""
+  else
+    echo "[start-acp-bridge] ngrok endpoint: ${NGROK_ENDPOINT}"
+    echo "[start-acp-bridge] paste that endpoint and the PIN into the iOS app"
+  fi
 fi
 
 python3 "$BRIDGE_PY" "${ARGS[@]}" &
