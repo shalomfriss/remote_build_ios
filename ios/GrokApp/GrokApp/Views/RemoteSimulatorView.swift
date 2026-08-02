@@ -68,7 +68,7 @@ struct RemoteSimulatorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, 32)
+                .padding(.trailing, 82)
                 .padding(.bottom, 4)
                 .offset(y: 10)
             }
@@ -101,6 +101,10 @@ private struct SimulatorWebView: UIViewRepresentable {
                 source: """
                 const style = document.createElement('style');
                 style.textContent = `
+                    a[href*="github.com/EvanBacon/serve-sim"],
+                    a[aria-label="Open serve-sim"] {
+                        display: none !important;
+                    }
                     button[aria-label="Open WebKit DevTools"] {
                         display: none !important;
                     }

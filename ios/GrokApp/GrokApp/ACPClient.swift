@@ -395,6 +395,13 @@ final class ACPClient: ObservableObject {
         await fetchSimulatorInfo().url
     }
 
+    func runSimulatorApp() async throws {
+        _ = try await sendRPC(
+            method: ACPProtocol.companionSimulatorRunMethod,
+            params: .object([:])
+        )
+    }
+
     func fetchSimulatorInfo() async -> (url: URL?, status: String?, error: String?) {
         guard isPaired else { return (nil, nil, nil) }
         do {

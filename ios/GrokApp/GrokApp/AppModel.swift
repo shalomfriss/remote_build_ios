@@ -733,13 +733,23 @@ final class AppModel: ObservableObject {
     }
 
     var canRunCurrentProject: Bool {
-        acp.sessionReady && !acp.isRunning
+        acp.sessionReady
+            && !acp.isRunning
+            && simulatorBuildStatus != "queued"
+            && simulatorBuildStatus != "building"
     }
 
     func runCurrentProject() {
         guard canRunCurrentProject else { return }
-        let command = "Build and run the current iOS app on the configured Simulator. Do not make feature changes. Compile, install, and launch the app."
-        acp.sendPrompt(command)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.acp.runSimulatorApp()
+                await self.refreshSimulatorURL()
+            } catch {
+                self.acp.tracker.appendError(error.localizedDescription)
+            }
+        }
     }
 
     func requestNewProject() {

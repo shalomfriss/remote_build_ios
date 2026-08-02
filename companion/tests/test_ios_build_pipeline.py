@@ -49,6 +49,37 @@ def test_only_end_turn_triggers_build() -> None:
     assert not PIPELINE.is_successful_turn(b"not json")
 
 
+def test_simulator_run_rpc_queues_pipeline_without_agent_prompt() -> None:
+    class Pipeline:
+        enabled = True
+        requests = 0
+
+        def request_build(self) -> None:
+            self.requests += 1
+
+    pipeline = Pipeline()
+    response = BRIDGE.handle_simulator_run_rpc({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": BRIDGE.SIMULATOR_RUN_METHOD,
+        "params": {},
+    }, pipeline)
+    assert response is not None
+    payload = json.loads(response)
+    assert payload["result"]["status"] == "queued"
+    assert pipeline.requests == 1
+
+
+def test_simulator_run_rpc_reports_unconfigured_pipeline() -> None:
+    response = BRIDGE.handle_simulator_run_rpc({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": BRIDGE.SIMULATOR_RUN_METHOD,
+    }, None)
+    assert response is not None
+    assert json.loads(response)["error"]["code"] == -32000
+
+
 def test_discovers_generated_project_and_scheme(tmp_path: Path) -> None:
     project = tmp_path / "Example.xcodeproj"
     project.mkdir()

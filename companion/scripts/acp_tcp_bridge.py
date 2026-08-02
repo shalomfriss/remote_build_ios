@@ -49,10 +49,38 @@ DEFAULT_PORT = 7391
 WORKSPACE_LIST_METHOD = "workspace/list"
 SESSION_LIST_METHODS = {"session/list", "x.ai/session/list"}
 COMPANION_METHODS = {MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD}
+SIMULATOR_RUN_METHOD = "x.ai/companion/simulator_run"
 
 
 def log(msg: str) -> None:
     print(f"[acp-bridge] {msg}", file=sys.stderr, flush=True)
+
+
+def handle_simulator_run_rpc(
+    msg: dict[str, Any],
+    ios_pipeline: IOSBuildPipeline | None,
+) -> bytes | None:
+    """Queue one companion-owned build without sending a prompt to the agent."""
+    if msg.get("method") != SIMULATOR_RUN_METHOD:
+        return None
+    req_id = msg.get("id")
+    if ios_pipeline is None or not ios_pipeline.enabled:
+        body: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32000,
+                "message": "iOS Simulator builds are not configured",
+            },
+        }
+    else:
+        ios_pipeline.request_build()
+        body = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"status": "queued"},
+        }
+    return (json.dumps(body) + "\n").encode("utf-8")
 
 
 def find_agent(
@@ -708,7 +736,9 @@ async def pipe_client_to_stdio(
                 await client_writer.drain()
                 continue
 
-            companion = handle_companion_rpc(msg, upstream)
+            companion = handle_simulator_run_rpc(msg, ios_pipeline)
+            if companion is None:
+                companion = handle_companion_rpc(msg, upstream)
             if companion is not None:
                 client_writer.write(companion)
                 await client_writer.drain()
