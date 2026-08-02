@@ -86,11 +86,59 @@ def test_session_list_response_uses_project_metadata_name(tmp_path: Path) -> Non
     response = (json.dumps({
         "jsonrpc": "2.0",
         "id": 7,
-        "result": {"sessions": [{"sessionId": "session-1", "cwd": str(project)}]},
+        "result": {"sessions": [{
+            "sessionId": "session-1",
+            "cwd": str(project),
+            "projectName": "Provider Generated Name",
+        }]},
     }) + "\n").encode()
     normalized = BRIDGE.enrich_session_list_response(response, {7})
     session = json.loads(normalized)["result"]["sessions"][0]
     assert session["projectName"] == "Trail Notes"
+
+
+def test_session_list_response_adds_cli_registered_project(tmp_path: Path) -> None:
+    project = tmp_path / "existing-project"
+    project.mkdir()
+    with patch.dict("os.environ", {"GROK_PROJECTS_ROOT": str(tmp_path)}, clear=False):
+        from project_registry import register_project
+        register_project(project, "CLI Project")
+        response = (json.dumps({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "result": {"sessions": []},
+        }) + "\n").encode()
+        normalized = BRIDGE.enrich_session_list_response(response, {9})
+    session = json.loads(normalized)["result"]["sessions"][0]
+    assert session["projectName"] == "CLI Project"
+    assert session["cwd"] == str(project)
+    assert session["sessionId"].startswith("grok-project:")
+
+
+def test_registered_project_load_opens_new_session_in_existing_directory(tmp_path: Path) -> None:
+    project = tmp_path / "existing-project"
+    project.mkdir()
+    with patch.dict("os.environ", {
+        "GROK_IOS_PROJECTS": "1",
+        "GROK_PROJECTS_ROOT": str(tmp_path),
+    }, clear=False):
+        from project_registry import register_project, session_id_for_project
+        register_project(project, "CLI Project")
+        message = (json.dumps({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id_for_project(project),
+                "cwd": str(project),
+            },
+        }) + "\n").encode()
+        pipeline = PIPELINE.IOSBuildPipeline(tmp_path, {})
+        normalized = BRIDGE.normalize_acp_line(message, tmp_path, pipeline)
+    request = json.loads(normalized)
+    assert request["method"] == "session/new"
+    assert request["params"]["cwd"] == str(project)
+    assert pipeline.workspace == project
 
 
 def test_session_list_response_falls_back_to_xcode_project_name(tmp_path: Path) -> None:

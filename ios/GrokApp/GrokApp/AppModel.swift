@@ -490,7 +490,8 @@ final class AppModel: ObservableObject {
             let deadline = Date.now.addingTimeInterval(30)
             while Date.now < deadline {
                 if Task.isCancelled { return }
-                if self.acp.sessionReady, self.acp.sessionId == id {
+                if self.acp.sessionReady,
+                   self.acp.sessionId == id || id.hasPrefix("grok-project:") {
                     self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
@@ -738,7 +739,6 @@ final class AppModel: ObservableObject {
     func runCurrentProject() {
         guard canRunCurrentProject else { return }
         let command = "Build and run the current iOS app on the configured Simulator. Do not make feature changes. Compile, install, and launch the app."
-        acp.tracker.appendUser("Run the app")
         acp.sendPrompt(command)
     }
 

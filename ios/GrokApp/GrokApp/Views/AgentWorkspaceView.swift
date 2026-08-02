@@ -52,7 +52,7 @@ struct AgentWorkspaceView: View {
                 }
             }
             .frame(width: 44, height: 44)
-            .padding(.trailing, 12)
+            .padding(.trailing, 32)
             .padding(.bottom, 4)
             .offset(y: 10)
         }

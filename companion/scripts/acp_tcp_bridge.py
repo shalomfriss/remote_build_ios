@@ -38,6 +38,11 @@ from ios_build_pipeline import (  # noqa: E402
     ios_projects_enabled,
 )
 from project_scaffold import create_project  # noqa: E402
+from project_registry import (  # noqa: E402
+    project_for_session_id,
+    registered_projects,
+    session_id_for_project,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7391
@@ -164,6 +169,16 @@ def project_name_for_workspace(cwd: str) -> str | None:
             return value.strip()
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
+    resolved = workspace.resolve()
+    registered = next(
+        (
+            project for project in registered_projects()
+            if Path(project["path"]).resolve() == resolved
+        ),
+        None,
+    )
+    if registered is not None:
+        return registered["name"]
     projects = sorted(workspace.glob("*.xcodeproj"))
     return projects[0].stem if projects else None
 
@@ -184,15 +199,28 @@ def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
     sessions = payload.get("sessions") if isinstance(payload, dict) else None
     if not isinstance(sessions, list):
         return line
+    session_paths: set[Path] = set()
     for session in sessions:
-        if not isinstance(session, dict) or session.get("projectName"):
+        if not isinstance(session, dict):
             continue
         cwd = session.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             continue
+        session_paths.add(Path(cwd).expanduser().resolve())
         project_name = project_name_for_workspace(cwd)
         if project_name:
             session["projectName"] = project_name
+    for project in registered_projects():
+        path = Path(project["path"]).resolve()
+        if path in session_paths:
+            continue
+        sessions.append({
+            "sessionId": session_id_for_project(path),
+            "cwd": str(path),
+            "title": project["name"],
+            "projectName": project["name"],
+            "registeredProject": True,
+        })
     suffix = "\n" if line.endswith(b"\n") else ""
     return (json.dumps(message, separators=(",", ":")) + suffix).encode("utf-8")
 
@@ -438,6 +466,25 @@ def normalize_acp_line(
         msg = json.loads(stripped)
     except json.JSONDecodeError:
         return text.encode("utf-8")
+    if msg.get("method") == "session/load":
+        params = msg.get("params")
+        session_id = params.get("sessionId") if isinstance(params, dict) else None
+        project = (
+            project_for_session_id(session_id)
+            if isinstance(session_id, str)
+            else None
+        )
+        if project is not None:
+            project_path = Path(project["path"])
+            msg["method"] = "session/new"
+            msg["params"] = {"cwd": str(project_path), "mcpServers": []}
+            if ios_pipeline is not None:
+                ios_pipeline.set_workspace(project_path)
+            text = json.dumps(msg, separators=(",", ":")) + (
+                "\n" if text.endswith("\n") else ""
+            )
+            log(f"opening registered project at {project_path}")
+            return text.encode("utf-8")
     if msg.get("method") in ("session/new", "session/create"):
         params = msg.setdefault("params", {})
         if not isinstance(params, dict):

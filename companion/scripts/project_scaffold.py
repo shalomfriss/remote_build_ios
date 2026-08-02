@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from project_registry import register_project
+
 
 def projects_root(env: Mapping[str, str] = os.environ) -> Path:
     configured = env.get("GROK_PROJECTS_ROOT", "").strip()
@@ -68,6 +70,7 @@ def create_project(
         json.dumps({"name": name_hint.strip() or target_name}, indent=2) + "\n",
         encoding="utf-8",
     )
+    register_project(directory, name_hint.strip() or target_name, env)
     return directory
 
 

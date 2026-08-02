@@ -5,6 +5,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+if [[ "${1:-}" == "add-project" ]]; then
+  shift
+  exec python3 "$ROOT/companion/scripts/project_registry.py" "$@"
+fi
+
 HOST="${GROK_ACP_HOST:-0.0.0.0}"
 PORT="${GROK_ACP_PORT:-7391}"
 AGENT="${ACP_AGENT:-codex}"
