@@ -37,7 +37,7 @@ from ios_build_pipeline import (  # noqa: E402
     add_ios_policy,
     ios_projects_enabled,
 )
-from project_scaffold import create_project  # noqa: E402
+from project_scaffold import create_project, projects_root  # noqa: E402
 from project_registry import (  # noqa: E402
     project_for_session_id,
     registered_projects,
@@ -64,6 +64,9 @@ def handle_simulator_run_rpc(
     if msg.get("method") != SIMULATOR_RUN_METHOD:
         return None
     req_id = msg.get("id")
+    params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+    cwd = params.get("cwd")
+    workspace = Path(cwd).expanduser() if isinstance(cwd, str) and cwd else None
     if ios_pipeline is None or not ios_pipeline.enabled:
         body: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -73,12 +76,23 @@ def handle_simulator_run_rpc(
                 "message": "iOS Simulator builds are not configured",
             },
         }
+    elif workspace is None or not workspace.is_absolute() or not workspace.is_dir():
+        body = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32602,
+                "message": "The active project directory is unavailable",
+            },
+        }
     else:
+        workspace = workspace.resolve()
+        ios_pipeline.set_workspace(workspace)
         ios_pipeline.request_build()
         body = {
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {"status": "queued"},
+            "result": {"status": "queued", "cwd": str(workspace)},
         }
     return (json.dumps(body) + "\n").encode("utf-8")
 
@@ -211,6 +225,22 @@ def project_name_for_workspace(cwd: str) -> str | None:
     return projects[0].stem if projects else None
 
 
+def is_resumable_project_workspace(cwd: str) -> bool:
+    workspace = Path(cwd).expanduser()
+    if not workspace.is_dir():
+        return False
+    resolved = workspace.resolve()
+    if any(Path(project["path"]).resolve() == resolved for project in registered_projects()):
+        return True
+    try:
+        resolved.relative_to(projects_root().resolve())
+    except ValueError:
+        return False
+    return (resolved / ".grok-build-project.json").is_file() or any(
+        resolved.glob("*.xcodeproj")
+    )
+
+
 def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
     try:
         message = json.loads(line.decode("utf-8", errors="replace").strip().replace("\\/", "/"))
@@ -228,16 +258,21 @@ def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
     if not isinstance(sessions, list):
         return line
     session_paths: set[Path] = set()
+    resumable_sessions: list[dict[str, Any]] = []
     for session in sessions:
         if not isinstance(session, dict):
             continue
         cwd = session.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             continue
+        if ios_projects_enabled() and not is_resumable_project_workspace(cwd):
+            continue
+        resumable_sessions.append(session)
         session_paths.add(Path(cwd).expanduser().resolve())
         project_name = project_name_for_workspace(cwd)
         if project_name:
             session["projectName"] = project_name
+    sessions[:] = resumable_sessions
     for project in registered_projects():
         path = Path(project["path"]).resolve()
         if path in session_paths:
@@ -518,7 +553,8 @@ def normalize_acp_line(
         if not isinstance(params, dict):
             params = {}
             msg["params"] = params
-        if ios_projects_enabled():
+        create_project_requested = params.pop("createProject", True) is not False
+        if ios_projects_enabled() and create_project_requested:
             project_name = params.pop("projectName", "ios-app")
             if not isinstance(project_name, str):
                 project_name = "ios-app"
@@ -528,6 +564,7 @@ def normalize_acp_line(
                 ios_pipeline.set_workspace(project)
             log(f"created iOS project at {project}")
         else:
+            params.pop("projectName", None)
             cwd = params.get("cwd")
             if not cwd or cwd in (".", ""):
                 params["cwd"] = str(workspace.resolve())

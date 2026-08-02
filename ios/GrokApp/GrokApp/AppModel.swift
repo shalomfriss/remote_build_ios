@@ -431,8 +431,8 @@ final class AppModel: ObservableObject {
         isLoadingSessions = true
         sessionListError = nil
         defer { isLoadingSessions = false }
-        if !acp.sessionReady {
-            acp.connect()
+        if !acp.isConnected || !acp.isPaired {
+            acp.connect(createProject: false)
             let deadline = Date.now.addingTimeInterval(15)
             while Date.now < deadline, !acp.sessionReady {
                 if Task.isCancelled { return }
@@ -444,7 +444,7 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
-        guard acp.sessionReady else {
+        guard acp.isConnected, acp.isPaired, acp.sessionReady else {
             sessionListError = "Timed out connecting to the agent"
             sessionListEntries = []
             return
@@ -469,7 +469,7 @@ final class AppModel: ObservableObject {
             // The session picker is populated over an already initialized ACP
             // connection. Reuse it so Resume does not kill the working bridge and
             // briefly expose a paired transport with no usable session.
-            if self.acp.isConnected, self.acp.isPaired, self.acp.sessionReady {
+            if self.acp.isConnected, self.acp.isPaired {
                 do {
                     try await self.acp.loadSession(id, cwd: cwd)
                     guard !Task.isCancelled else { return }
@@ -580,7 +580,7 @@ final class AppModel: ObservableObject {
         guard case .succeeded = connectionPhase else { return }
         CompanionConfig.isOnboarded = true
         companionBrowser.stop()
-        // Keep ACP session alive — do not reset tracker/session here.
+        // Keep the paired transport alive; the user chooses New or Resume next.
         connectionPhase = .succeeded
         showWelcome()
     }
@@ -593,10 +593,10 @@ final class AppModel: ObservableObject {
         if let preferredBonjourEndpoint {
             acp.setPreferredEndpoint(preferredBonjourEndpoint)
         }
-        acp.connect()
+        acp.connect(createProject: false)
 
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline {
+        let deadline = Date.now.addingTimeInterval(30)
+        while Date.now < deadline {
             if Task.isCancelled { return }
             if let err = acp.lastError, !err.isEmpty {
                 if allowBonjourFallback, await retryWithDiscoveredCompanion(after: err) {
@@ -607,7 +607,7 @@ final class AppModel: ObservableObject {
                 acp.disconnect()
                 return
             }
-            if acp.sessionReady, acp.sessionId != nil {
+            if acp.isConnected, acp.isPaired, acp.sessionReady, acp.sessionId != nil {
                 simulatorURL = await acp.fetchSimulatorURL()
                 connectionPhase = .succeeded
                 setupError = nil
@@ -617,7 +617,7 @@ final class AppModel: ObservableObject {
                 }
                 return
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(for: .milliseconds(250))
         }
         let msg = acp.lastError
             ?? "Could not reach agent — is `agent-phone` running?"
@@ -733,23 +733,12 @@ final class AppModel: ObservableObject {
     }
 
     var canRunCurrentProject: Bool {
-        acp.sessionReady
-            && !acp.isRunning
-            && simulatorBuildStatus != "queued"
-            && simulatorBuildStatus != "building"
+        acp.sessionReady && !acp.isRunning
     }
 
     func runCurrentProject() {
         guard canRunCurrentProject else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                try await self.acp.runSimulatorApp()
-                await self.refreshSimulatorURL()
-            } catch {
-                self.acp.tracker.appendError(error.localizedDescription)
-            }
-        }
+        submitPrompt("run the project")
     }
 
     func requestNewProject() {
@@ -821,8 +810,12 @@ final class AppModel: ObservableObject {
             // In-prompt @ references stay in agent — no FilePicker navigation.
         }
 
-        acp.tracker.appendUser(text)
         draft = ""
+        submitPrompt(text)
+    }
+
+    private func submitPrompt(_ text: String) {
+        acp.tracker.appendUser(text)
         acp.sendPrompt(text)
     }
 

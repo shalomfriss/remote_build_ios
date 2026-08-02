@@ -47,6 +47,7 @@ final class ACPClient: ObservableObject {
     private var preserveSessionIdOnReconnect: String?
     private var preserveSessionCwdOnReconnect: String?
     private var pendingProjectName: String?
+    private var createProjectAfterConnect = true
     private var receiveLoopActive = false
 
     private(set) var chrome = SessionChrome()
@@ -56,10 +57,11 @@ final class ACPClient: ObservableObject {
         preferredEndpoint = endpoint
     }
 
-    func connect() {
+    func connect(createProject: Bool = true) {
         if connection != nil || webSocketTask != nil {
             return
         }
+        createProjectAfterConnect = createProject
         lastError = nil
         sessionReady = false
         isPaired = false
@@ -398,7 +400,7 @@ final class ACPClient: ObservableObject {
     func runSimulatorApp() async throws {
         _ = try await sendRPC(
             method: ACPProtocol.companionSimulatorRunMethod,
-            params: .object([:])
+            params: .object(["cwd": .string(chrome.cwd)])
         )
     }
 
@@ -508,7 +510,7 @@ final class ACPClient: ObservableObject {
 
     /// New project on an already-open transport — `session/new` without reconnect.
     func startFreshSession(named projectName: String) async {
-        guard isConnected, isPaired, sessionReady else {
+        guard isConnected, isPaired else {
             pendingProjectName = projectName
             connect()
             return
@@ -573,7 +575,11 @@ final class ACPClient: ObservableObject {
                 params: ACPProtocol.initializeParams()
             )
 
+            isConnected = true
+            connectTimeoutTask?.cancel()
+            connectTimeoutTask = nil
             if let resumeId = preserveSessionIdOnReconnect, !resumeId.isEmpty {
+                createProjectAfterConnect = true
                 let resumeCwd = preserveSessionCwdOnReconnect
                 preserveSessionIdOnReconnect = nil
                 preserveSessionCwdOnReconnect = nil
@@ -581,9 +587,14 @@ final class ACPClient: ObservableObject {
             } else {
                 let projectName = pendingProjectName
                 pendingProjectName = nil
+                let shouldCreateProject = createProjectAfterConnect
+                createProjectAfterConnect = true
                 let sessionResp = try await sendRPC(
                     method: "session/new",
-                    params: ACPProtocol.sessionNewParams(projectName: projectName)
+                    params: ACPProtocol.sessionNewParams(
+                        projectName: projectName,
+                        createProject: shouldCreateProject
+                    )
                 )
                 guard let result = sessionResp.result,
                       let sid = result["sessionId"]?.stringValue else {
@@ -609,9 +620,6 @@ final class ACPClient: ObservableObject {
                 await refreshBilling()
             }
 
-            isConnected = true
-            connectTimeoutTask?.cancel()
-            connectTimeoutTask = nil
             if let pending = pendingPrompt {
                 pendingPrompt = nil
                 chrome.turnActivity = "Thinking…"

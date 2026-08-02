@@ -33,6 +33,7 @@ struct AgentWorkspaceView: View {
                         Button("Run", systemImage: "play.fill", action: runProject)
                             .labelStyle(.iconOnly)
                             .buttonStyle(.bordered)
+                            .tint(Color.primary)
                             .buttonBorderShape(.circle)
                             .controlSize(.large)
                             .frame(minWidth: 44, minHeight: 44)
@@ -46,13 +47,14 @@ struct AgentWorkspaceView: View {
                     )
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
+                    .tint(Color.primary)
                     .buttonBorderShape(.circle)
                     .controlSize(.large)
                     .frame(minWidth: 44, minHeight: 44)
                 }
             }
             .frame(width: 44, height: 44)
-            .padding(.trailing, 82)
+            .padding(.trailing, 30)
             .padding(.bottom, 4)
             .offset(y: 10)
         }
@@ -67,7 +69,6 @@ struct AgentWorkspaceView: View {
                 onToggleFullScreen: { isSimulatorFullScreen = false }
             )
             .environmentObject(model)
-            .ignoresSafeArea()
             .statusBarHidden()
         }
     }

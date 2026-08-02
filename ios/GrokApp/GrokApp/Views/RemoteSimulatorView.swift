@@ -37,6 +37,7 @@ struct RemoteSimulatorView: View {
                     }
                 }
             }
+            .ignoresSafeArea(edges: isFullScreen ? .all : [])
 
             if model.simulatorBuildStatus == "queued" || model.simulatorBuildStatus == "building" {
                 Label("Building and launching iOS app…", systemImage: "hammer")
@@ -62,13 +63,14 @@ struct RemoteSimulatorView: View {
                         Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: onToggleFullScreen)
                             .labelStyle(.iconOnly)
                             .buttonStyle(.bordered)
+                            .tint(Color.primary)
                             .buttonBorderShape(.circle)
                             .controlSize(.large)
                             .frame(minWidth: 44, minHeight: 44)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, 82)
+                .padding(.trailing, 30)
                 .padding(.bottom, 4)
                 .offset(y: 10)
             }
@@ -117,13 +119,28 @@ private struct SimulatorWebView: UIViewRepresentable {
         )
         if fillsViewport {
             // serve-sim restores its last simulator width from localStorage after
-            // stream metadata arrives. Give the full-screen preview isolated
-            // storage with the maximum scale so that late restore still fits the
-            // expanded viewport instead of snapping back to the tab's width.
+            // stream metadata arrives. Give the full-screen preview isolated storage,
+            // request a larger scale, and reclaim its generous desktop spacing while
+            // leaving the status and action controls visible.
             configuration.websiteDataStore = .nonPersistent()
             configuration.userContentController.addUserScript(
                 WKUserScript(
-                    source: "localStorage.setItem('serve-sim:simulator-frame-scale', '3')",
+                    source: """
+                    localStorage.setItem('serve-sim:simulator-frame-scale', '4');
+                    document.documentElement.classList.add('grok-fullscreen-simulator');
+                    const fullscreenStyle = document.createElement('style');
+                    fullscreenStyle.textContent = `
+                        .grok-fullscreen-simulator [class*="h-screen"][class*="flex-col"][class*="items-center"][class*="justify-center"] {
+                            padding-top: 4px !important;
+                            padding-bottom: 4px !important;
+                            gap: 4px !important;
+                        }
+                    `;
+                    document.documentElement.appendChild(fullscreenStyle);
+                    window.addEventListener('load', () => {
+                        window.dispatchEvent(new Event('resize'));
+                    });
+                    """,
                     injectionTime: .atDocumentStart,
                     forMainFrameOnly: true
                 )

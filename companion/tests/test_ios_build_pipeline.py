@@ -49,10 +49,14 @@ def test_only_end_turn_triggers_build() -> None:
     assert not PIPELINE.is_successful_turn(b"not json")
 
 
-def test_simulator_run_rpc_queues_pipeline_without_agent_prompt() -> None:
+def test_simulator_run_rpc_queues_active_workspace_without_agent_prompt(tmp_path: Path) -> None:
     class Pipeline:
         enabled = True
         requests = 0
+        workspace: Path | None = None
+
+        def set_workspace(self, workspace: Path) -> None:
+            self.workspace = workspace
 
         def request_build(self) -> None:
             self.requests += 1
@@ -62,11 +66,13 @@ def test_simulator_run_rpc_queues_pipeline_without_agent_prompt() -> None:
         "jsonrpc": "2.0",
         "id": 12,
         "method": BRIDGE.SIMULATOR_RUN_METHOD,
-        "params": {},
+        "params": {"cwd": str(tmp_path)},
     }, pipeline)
     assert response is not None
     payload = json.loads(response)
     assert payload["result"]["status"] == "queued"
+    assert payload["result"]["cwd"] == str(tmp_path)
+    assert pipeline.workspace == tmp_path
     assert pipeline.requests == 1
 
 
@@ -110,6 +116,34 @@ def test_new_session_creates_and_selects_project(tmp_path: Path) -> None:
     assert pipeline.workspace == cwd
 
 
+def test_setup_session_uses_workspace_without_creating_project(tmp_path: Path) -> None:
+    workspace = tmp_path / "companion-workspace"
+    workspace.mkdir()
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    message = (json.dumps({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/new",
+        "params": {
+            "cwd": str(workspace),
+            "mcpServers": [],
+            "createProject": False,
+        },
+    }) + "\n").encode()
+    pipeline = PIPELINE.IOSBuildPipeline(workspace, {})
+    with patch.dict("os.environ", {
+        "GROK_IOS_PROJECTS": "1",
+        "GROK_PROJECTS_ROOT": str(projects_root),
+    }, clear=False):
+        normalized = BRIDGE.normalize_acp_line(message, workspace, pipeline)
+    params = json.loads(normalized)["params"]
+    assert params["cwd"] == str(workspace)
+    assert "createProject" not in params
+    assert list(projects_root.iterdir()) == []
+    assert pipeline.workspace == workspace
+
+
 def test_session_list_response_uses_project_metadata_name(tmp_path: Path) -> None:
     project = tmp_path / "trail-notes-20260802-abc123"
     project.mkdir()
@@ -144,6 +178,32 @@ def test_session_list_response_adds_cli_registered_project(tmp_path: Path) -> No
     assert session["projectName"] == "CLI Project"
     assert session["cwd"] == str(project)
     assert session["sessionId"].startswith("grok-project:")
+
+
+def test_resume_projects_excludes_sessions_outside_projects_root(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    project = projects / "trail-notes"
+    project.mkdir()
+    (project / "TrailNotes.xcodeproj").mkdir()
+    unrelated = tmp_path / "test-fixture"
+    unrelated.mkdir()
+    (unrelated / "Fixture.xcodeproj").mkdir()
+    response = (json.dumps({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {"sessions": [
+            {"sessionId": "real", "cwd": str(project)},
+            {"sessionId": "fixture", "cwd": str(unrelated)},
+        ]},
+    }) + "\n").encode()
+    with patch.dict("os.environ", {
+        "GROK_IOS_PROJECTS": "1",
+        "GROK_PROJECTS_ROOT": str(projects),
+    }, clear=False):
+        normalized = BRIDGE.enrich_session_list_response(response, {14})
+    sessions = json.loads(normalized)["result"]["sessions"]
+    assert [session["sessionId"] for session in sessions] == ["real"]
 
 
 def test_registered_project_load_opens_new_session_in_existing_directory(tmp_path: Path) -> None:

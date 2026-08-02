@@ -171,7 +171,10 @@ enum ACPProtocol {
         ])
     }
 
-    static func sessionNewParams(projectName: String? = nil) -> JSONValue {
+    static func sessionNewParams(
+        projectName: String? = nil,
+        createProject: Bool = true
+    ) -> JSONValue {
         // Official `grok agent serve` requires an absolute cwd (relative "." → -32602).
         var params: [String: JSONValue] = [
             "cwd": .string(CompanionConfig.workspaceCwd()),
@@ -182,6 +185,12 @@ enum ACPProtocol {
             // Companion-only extension. The bridge removes it before forwarding
             // session/new to the provider.
             params["projectName"] = .string(projectName)
+        }
+        if !createProject {
+            // Companion-only extension. Setup still creates an ACP session, but
+            // the bridge keeps it in the companion workspace instead of
+            // scaffolding a project.
+            params["createProject"] = .bool(false)
         }
         return .object(params)
     }

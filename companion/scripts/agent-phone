@@ -45,6 +45,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+port_is_available() {
+  python3 - "$1" "$2" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+family = socket.AF_INET6 if ":" in host else socket.AF_INET
+with socket.socket(family, socket.SOCK_STREAM) as probe:
+    try:
+        probe.bind((host, port))
+    except OSError:
+        raise SystemExit(1)
+PY
+}
+
+if ! port_is_available "$HOST" "$PORT"; then
+  echo "agent-phone: companion port ${PORT} is already in use; another agent-phone may already be running" >&2
+  echo "agent-phone: stop the existing process or choose another port with --port <port>" >&2
+  exit 1
+fi
+if [[ "$SIMULATOR" == "1" ]] && ! port_is_available "127.0.0.1" "$SIMULATOR_PORT"; then
+  echo "agent-phone: simulator port ${SIMULATOR_PORT} is already in use; another simulator preview may already be running" >&2
+  echo "agent-phone: stop the existing process or set GROK_SIMULATOR_PORT to another port" >&2
+  exit 1
+fi
+
 echo "agent-phone: ${AGENT} ACP agent ← TLS+PIN on ${HOST}:${PORT}"
 echo "agent-phone: workspace=${GROK_COMPANION_CWD}"
 echo "agent-phone: new projects=${GROK_PROJECTS_ROOT}"
@@ -90,16 +117,6 @@ export GROK_SIMULATOR_STATE_FILE="${GROK_SIMULATOR_STATE_FILE:-$GROK_COMPANION_S
 rm -f "$GROK_SIMULATOR_STATE_FILE"
 
 SERVE_SIM_LOG="$GROK_COMPANION_STATE_DIR/serve-sim.log"
-if ! python3 - "$SIMULATOR_PORT" <<'PY'
-import socket
-import sys
-with socket.socket() as probe:
-    probe.bind(("127.0.0.1", int(sys.argv[1])))
-PY
-then
-  echo "agent-phone: port ${SIMULATOR_PORT} is already in use; set GROK_SIMULATOR_PORT to another port" >&2
-  exit 1
-fi
 LAN_SIMULATOR_URL=""
 if LAN_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" \
   --port "$SIMULATOR_PORT" 2>/dev/null)"; then

@@ -202,11 +202,28 @@ struct SessionListEntry: Identifiable, Equatable {
     let projectName: String?
 
     var displayName: String {
-        guard let projectName = projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !projectName.isEmpty else {
-            return title
+        if let projectName = projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !projectName.isEmpty {
+            return projectName
         }
-        return projectName
+        guard !cwd.isEmpty else { return title }
+        var components = URL(fileURLWithPath: cwd).lastPathComponent.split(separator: "-")
+        if components.count >= 4,
+           components[components.count - 3].count == 8,
+           components[components.count - 3].allSatisfy(\.isNumber),
+           components[components.count - 2].count == 6,
+           components[components.count - 2].allSatisfy(\.isNumber),
+           components[components.count - 1].count == 6,
+           components[components.count - 1].allSatisfy(\.isHexDigit) {
+            components.removeLast(3)
+        }
+        guard !components.isEmpty else { return title }
+        if components.count == 1 {
+            return String(components[0]).replacing("_", with: " ")
+        }
+        return components
+            .map { String($0).replacing("_", with: " ").localizedCapitalized }
+            .joined(separator: " ")
     }
 }
 

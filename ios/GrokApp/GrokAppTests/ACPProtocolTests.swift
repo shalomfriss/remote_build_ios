@@ -47,6 +47,12 @@ final class ACPProtocolTests: XCTestCase {
     func testSessionNewIncludesTrimmedProjectName() {
         let params = ACPProtocol.sessionNewParams(projectName: "  Trail Notes  ")
         XCTAssertEqual(params["projectName"]?.stringValue, "Trail Notes")
+        XCTAssertNil(params["createProject"])
+    }
+
+    func testSetupSessionDoesNotRequestProjectCreation() {
+        let params = ACPProtocol.sessionNewParams(createProject: false)
+        XCTAssertEqual(params["createProject"]?.boolValue, false)
     }
 
     func testSessionListEntryPrefersProjectName() {
@@ -55,6 +61,17 @@ final class ACPProtocolTests: XCTestCase {
             title: "Build a notes app",
             cwd: "/tmp/trail-notes",
             projectName: "Trail Notes"
+        )
+
+        XCTAssertEqual(entry.displayName, "Trail Notes")
+    }
+
+    func testSessionListEntryFallsBackToGeneratedProjectFolderName() {
+        let entry = SessionListEntry(
+            id: "session-2",
+            title: "Build a notes app",
+            cwd: "/Users/test/.projects/trail-notes-20260802-142326-13ab69",
+            projectName: nil
         )
 
         XCTAssertEqual(entry.displayName, "Trail Notes")
