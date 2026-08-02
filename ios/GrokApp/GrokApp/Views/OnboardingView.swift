@@ -59,12 +59,13 @@ struct OnboardingView: View {
                 || model.acpPortDraft == String(CompanionConfig.defaultWebSocketPort) {
                 model.acpPortDraft = String(CompanionConfig.defaultPort)
             }
+            model.startLegacyBonjourBrowse()
         }
-        .onChange(of: showLegacyBridge) { _, browsing in
-            if browsing {
-                model.startLegacyBonjourBrowse()
-            } else {
-                model.stopLegacyBonjourBrowse()
+        .onChange(of: model.companionBrowser.peers) { _, peers in
+            model.selectBonjourPeerIfAppropriate(from: peers)
+        }
+        .onChange(of: focused) { _, field in
+            if field == .host {
                 model.clearBonjourPreference()
             }
         }
@@ -98,6 +99,20 @@ struct OnboardingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(theme.bgTerminal)
                 .overlay(Rectangle().stroke(theme.promptBorder, lineWidth: 1))
+
+            Text("Companion address")
+                .font(.caption.monospaced())
+                .foregroundStyle(theme.textSecondary)
+            TextField("auto-discovered or tcp://host:port", text: $model.acpHostDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.caption.monospaced())
+                .foregroundStyle(theme.textPrimary)
+                .padding(12)
+                .background(theme.bgTerminal)
+                .overlay(Rectangle().stroke(focused == .host ? theme.textPrimary : theme.promptBorder, lineWidth: 1))
+                .focused($focused, equals: .host)
+                .disabled(isChecking || isConnectedOK)
 
             Text("Pairing PIN")
                 .font(.caption.monospaced())
@@ -185,18 +200,9 @@ struct OnboardingView: View {
 
     private func advancedSection(theme: GrokTheme) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("host / port, or paste the tcp:// endpoint printed by --ngrok")
+            Text("Local bridge port")
                 .font(.caption2.monospaced())
                 .foregroundStyle(theme.textSecondary)
-            TextField("host or tcp://host:port", text: $model.acpHostDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.caption.monospaced())
-                .padding(10)
-                .background(theme.bgTerminal)
-                .overlay(Rectangle().stroke(theme.promptBorder, lineWidth: 1))
-                .focused($focused, equals: .host)
-                .disabled(isChecking)
             TextField("port", text: $model.acpPortDraft)
                 .keyboardType(.numberPad)
                 .font(.caption.monospaced())

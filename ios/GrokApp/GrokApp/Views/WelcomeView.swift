@@ -86,13 +86,13 @@ struct WelcomeView: View {
 
     private var menuRows: [MenuRow] {
         var rows: [MenuRow] = [
-            MenuRow(label: "New worktree", shortcut: "ctrl+w", action: {
+            MenuRow(label: "New Project", shortcut: "ctrl+w", action: {
                 guard model.canStartSession else { model.showOnboarding(); return }
-                model.startNewSession()
+                model.requestNewProject()
             }),
-            MenuRow(label: "Resume session", shortcut: "ctrl+s", action: {
+            MenuRow(label: "Resume Project", shortcut: "ctrl+s", action: {
                 guard model.canStartSession else { model.showOnboarding(); return }
-                model.resumeSessionFromWelcome()
+                model.resumeProjectFromWelcome()
             }),
         ]
         if model.hasChangelog {

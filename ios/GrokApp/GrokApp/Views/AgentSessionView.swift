@@ -13,7 +13,7 @@ struct AgentSessionView: View {
             AgentStatusBar(
                 chrome: model.chrome,
                 theme: theme,
-                isConnected: model.acp.sessionReady || (model.acp.isConnected && model.acp.isPaired),
+                isConnected: model.acp.sessionReady && model.reconnectBanner == nil,
                 onBack: { model.showWelcome() }
             )
             if let banner = model.reconnectBanner {
@@ -43,7 +43,8 @@ struct AgentSessionView: View {
                 theme: theme,
                 showTimestamps: model.showTimestamps,
                 onToggleFold: { id in model.acp.tracker.toggleFold(id: id) },
-                onOpenMermaid: { source in await model.renderMermaidPNG(source: source) }
+                onOpenMermaid: { source in await model.renderMermaidPNG(source: source) },
+                onDismissKeyboard: dismissKeyboard
             )
             .background(theme.bgTerminal)
             if let permission = model.permissionRequest {
@@ -102,6 +103,10 @@ struct AgentSessionView: View {
             }
         }
         .background(theme.bgBase)
+    }
+
+    private func dismissKeyboard() {
+        model.isPromptFocused = false
     }
 }
 

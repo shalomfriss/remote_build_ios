@@ -37,13 +37,13 @@ struct PromptBar: View {
                     .contentShape(Rectangle())
                     .onTapGesture(perform: focusPrompt)
 
-                TextField(placeholder, text: $draft, axis: .vertical)
+                TextField(placeholder, text: $draft)
                     .font(promptFont)
                     .foregroundStyle(theme.textPrimary)
                     .tint(theme.running)
                     .textInputAutocapitalization(.sentences)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...6)
+                    .lineLimit(1)
                     .focused($fieldFocused)
                     .submitLabel(.send)
                     .onSubmit { sendPrompt() }

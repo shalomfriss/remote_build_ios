@@ -43,4 +43,20 @@ final class ACPProtocolTests: XCTestCase {
         XCTAssertEqual(params["sessionId"]?.stringValue, "session-1")
         XCTAssertEqual(params["cwd"]?.stringValue, "/tmp/project")
     }
+
+    func testSessionNewIncludesTrimmedProjectName() {
+        let params = ACPProtocol.sessionNewParams(projectName: "  Trail Notes  ")
+        XCTAssertEqual(params["projectName"]?.stringValue, "Trail Notes")
+    }
+
+    func testSessionListEntryPrefersProjectName() {
+        let entry = SessionListEntry(
+            id: "session-1",
+            title: "Build a notes app",
+            cwd: "/tmp/trail-notes",
+            projectName: "Trail Notes"
+        )
+
+        XCTAssertEqual(entry.displayName, "Trail Notes")
+    }
 }

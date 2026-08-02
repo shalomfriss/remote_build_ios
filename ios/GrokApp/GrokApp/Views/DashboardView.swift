@@ -25,8 +25,8 @@ struct DashboardView: View {
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Spacer()
-                Button(action: { model.startNewSessionFromDashboard() }) {
-                    Text("[+ New Agent]")
+                Button(action: model.startNewSessionFromDashboard) {
+                    Text("[+ New Project]")
                         .font(.caption.monospaced())
                         .foregroundStyle(theme.textPrimary)
                 }

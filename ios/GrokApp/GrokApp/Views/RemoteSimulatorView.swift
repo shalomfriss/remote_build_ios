@@ -7,6 +7,8 @@ import WebKit
 struct RemoteSimulatorView: View {
     @EnvironmentObject private var model: AppModel
     @State private var webError: String?
+    let isFullScreen: Bool
+    let onToggleFullScreen: () -> Void
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -20,7 +22,11 @@ struct RemoteSimulatorView: View {
                         Button("Retry", action: retry)
                     }
                 } else if let url = model.simulatorURL {
-                    SimulatorWebView(url: url, error: $webError)
+                    SimulatorWebView(
+                        url: url,
+                        fillsViewport: isFullScreen,
+                        error: $webError
+                    )
                 } else {
                     ContentUnavailableView {
                         Label("Simulator unavailable", systemImage: "iphone.slash")
@@ -47,9 +53,29 @@ struct RemoteSimulatorView: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 .padding()
             }
+
+            if isFullScreen {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: onToggleFullScreen)
+                            .labelStyle(.iconOnly)
+                            .font(.body.bold())
+                            .frame(width: 44, height: 44)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.primary)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                }
+                .padding()
+            }
         }
         .background(model.theme.bgBase)
         .task {
+            // The tab remains mounted beneath the full-screen cover and owns the
+            // polling loop, so the cover should not start a duplicate monitor.
+            guard !isFullScreen else { return }
             await model.monitorSimulator()
         }
     }
@@ -62,11 +88,41 @@ struct RemoteSimulatorView: View {
 
 private struct SimulatorWebView: UIViewRepresentable {
     let url: URL
+    let fillsViewport: Bool
     @Binding var error: String?
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: """
+                const style = document.createElement('style');
+                style.textContent = `
+                    button[aria-label="Open WebKit DevTools"] {
+                        display: none !important;
+                    }
+                `;
+                document.documentElement.appendChild(style);
+                """,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+        if fillsViewport {
+            // serve-sim restores its last simulator width from localStorage after
+            // stream metadata arrives. Give the full-screen preview isolated
+            // storage with the maximum scale so that late restore still fits the
+            // expanded viewport instead of snapping back to the tab's width.
+            configuration.websiteDataStore = .nonPersistent()
+            configuration.userContentController.addUserScript(
+                WKUserScript(
+                    source: "localStorage.setItem('serve-sim:simulator-frame-scale', '3')",
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                )
+            )
+        }
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false

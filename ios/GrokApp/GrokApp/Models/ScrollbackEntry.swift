@@ -199,6 +199,15 @@ struct SessionListEntry: Identifiable, Equatable {
     let id: String
     let title: String
     let cwd: String
+    let projectName: String?
+
+    var displayName: String {
+        guard let projectName = projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !projectName.isEmpty else {
+            return title
+        }
+        return projectName
+    }
 }
 
 /// Live roster row from `x.ai/sessions/list` / `x.ai/sessions/changed`.

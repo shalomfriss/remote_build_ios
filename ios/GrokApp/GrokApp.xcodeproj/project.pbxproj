@@ -61,6 +61,7 @@
 		B10000010000000000000037 /* AgentWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000037 /* AgentWorkspaceView.swift */; };
 		B10000010000000000000038 /* RemoteSimulatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000038 /* RemoteSimulatorView.swift */; };
 		B10000010000000000000039 /* WorkspaceTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000039 /* WorkspaceTab.swift */; };
+		B1000001000000000000003A /* WorkspaceTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000003A /* WorkspaceTabBar.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -131,6 +132,7 @@
 		F10000010000000000000037 /* AgentWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWorkspaceView.swift; sourceTree = "<group>"; };
 		F10000010000000000000038 /* RemoteSimulatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSimulatorView.swift; sourceTree = "<group>"; };
 		F10000010000000000000039 /* WorkspaceTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTab.swift; sourceTree = "<group>"; };
+		F1000001000000000000003A /* WorkspaceTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -243,6 +245,7 @@
 				F10000010000000000000037 /* AgentWorkspaceView.swift */,
 				F10000010000000000000038 /* RemoteSimulatorView.swift */,
 				F10000010000000000000039 /* WorkspaceTab.swift */,
+				F1000001000000000000003A /* WorkspaceTabBar.swift */,
 				F10000010000000000000024 /* DashboardView.swift */,
 			);
 			path = Views;
@@ -444,6 +447,7 @@
 				B10000010000000000000037 /* AgentWorkspaceView.swift in Sources */,
 				B10000010000000000000038 /* RemoteSimulatorView.swift in Sources */,
 				B10000010000000000000039 /* WorkspaceTab.swift in Sources */,
+				B1000001000000000000003A /* WorkspaceTabBar.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

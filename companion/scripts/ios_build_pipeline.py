@@ -36,15 +36,15 @@ def log(message: str) -> None:
     print(f"[ios-build] {message}", file=sys.stderr, flush=True)
 
 
-def ios_workstreams_enabled(env: Mapping[str, str] = os.environ) -> bool:
-    value = env.get("GROK_IOS_WORKSTREAMS", "").strip().lower()
+def ios_projects_enabled(env: Mapping[str, str] = os.environ) -> bool:
+    value = env.get("GROK_IOS_PROJECTS", "").strip().lower()
     return value in {"1", "true", "yes"}
 
 
 def ios_build_enabled(env: Mapping[str, str] = os.environ) -> bool:
     value = env.get("GROK_AUTO_BUILD_IOS", "").strip().lower()
     return (
-        ios_workstreams_enabled(env)
+        ios_projects_enabled(env)
         and value in {"1", "true", "yes"}
         and bool(env.get("GROK_SIMULATOR_UDID"))
     )

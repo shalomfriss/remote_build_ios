@@ -35,13 +35,14 @@ from companion_ext import (  # noqa: E402
 from ios_build_pipeline import (  # noqa: E402
     IOSBuildPipeline,
     add_ios_policy,
-    ios_workstreams_enabled,
+    ios_projects_enabled,
 )
-from workstream_project import create_workstream_project  # noqa: E402
+from project_scaffold import create_project  # noqa: E402
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7391
 WORKSPACE_LIST_METHOD = "workspace/list"
+SESSION_LIST_METHODS = {"session/list", "x.ai/session/list"}
 COMPANION_METHODS = {MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD}
 
 
@@ -150,6 +151,50 @@ def list_workspace_files(workspace: Path, max_files: int = 500) -> list[str]:
             if len(out) >= max_files:
                 return out
     return out
+
+
+def project_name_for_workspace(cwd: str) -> str | None:
+    workspace = Path(cwd).expanduser()
+    if not workspace.is_dir():
+        return None
+    metadata = workspace / ".grok-build-project.json"
+    try:
+        value = json.loads(metadata.read_text(encoding="utf-8")).get("name")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    projects = sorted(workspace.glob("*.xcodeproj"))
+    return projects[0].stem if projects else None
+
+
+def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
+    try:
+        message = json.loads(line.decode("utf-8", errors="replace").strip().replace("\\/", "/"))
+    except (json.JSONDecodeError, AttributeError):
+        return line
+    response_id = message.get("id")
+    if response_id not in request_ids:
+        return line
+    request_ids.discard(response_id)
+    result = message.get("result")
+    if not isinstance(result, dict):
+        return line
+    payload = result.get("data") if isinstance(result.get("data"), dict) else result
+    sessions = payload.get("sessions") if isinstance(payload, dict) else None
+    if not isinstance(sessions, list):
+        return line
+    for session in sessions:
+        if not isinstance(session, dict) or session.get("projectName"):
+            continue
+        cwd = session.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            continue
+        project_name = project_name_for_workspace(cwd)
+        if project_name:
+            session["projectName"] = project_name
+    suffix = "\n" if line.endswith(b"\n") else ""
+    return (json.dumps(message, separators=(",", ":")) + suffix).encode("utf-8")
 
 
 class AcpStub:
@@ -398,12 +443,15 @@ def normalize_acp_line(
         if not isinstance(params, dict):
             params = {}
             msg["params"] = params
-        if ios_workstreams_enabled():
-            workstream = create_workstream_project()
-            params["cwd"] = str(workstream)
+        if ios_projects_enabled():
+            project_name = params.pop("projectName", "ios-app")
+            if not isinstance(project_name, str):
+                project_name = "ios-app"
+            project = create_project(project_name)
+            params["cwd"] = str(project)
             if ios_pipeline is not None:
-                ios_pipeline.set_workspace(workstream)
-            log(f"created iOS workstream at {workstream}")
+                ios_pipeline.set_workspace(project)
+            log(f"created iOS project at {project}")
         else:
             cwd = params.get("cwd")
             if not cwd or cwd in (".", ""):
@@ -421,7 +469,7 @@ def normalize_acp_line(
             path = Path(cwd).expanduser()
             if path.is_dir():
                 ios_pipeline.set_workspace(path)
-    if ios_workstreams_enabled() and msg.get("method") == "session/prompt":
+    if ios_projects_enabled() and msg.get("method") == "session/prompt":
         msg = add_ios_policy(msg)
         text = json.dumps(msg, separators=(",", ":")) + ("\n" if text.endswith("\n") else "")
         return text.encode("utf-8")
@@ -540,6 +588,7 @@ async def pipe_stream_drop_id(
     dst: asyncio.StreamWriter,
     label: str,
     drop_response_id: Any,
+    normalize: Callable[[bytes], bytes] | None = None,
     on_line: Callable[[bytes], None] | None = None,
 ) -> None:
     """stdio→tcp pipe that drops one JSON-RPC response matching drop_response_id."""
@@ -558,6 +607,8 @@ async def pipe_stream_drop_id(
                         continue
                 except (json.JSONDecodeError, AttributeError):
                     pass
+            if normalize is not None:
+                line = normalize(line)
             if on_line is not None:
                 on_line(line)
             dst.write(line)
@@ -575,6 +626,7 @@ async def pipe_client_to_stdio(
     workspace: Path,
     upstream: Path,
     ios_pipeline: IOSBuildPipeline | None = None,
+    session_list_request_ids: set[Any] | None = None,
 ) -> None:
     """tcp→stdio with companion method intercept (mermaid / config / workspace)."""
     try:
@@ -594,6 +646,10 @@ async def pipe_client_to_stdio(
                 continue
 
             method = msg.get("method")
+            if method in SESSION_LIST_METHODS and session_list_request_ids is not None:
+                request_id = msg.get("id")
+                if request_id is not None:
+                    session_list_request_ids.add(request_id)
             if method == WORKSPACE_LIST_METHOD:
                 req_id = msg.get("id")
                 files = list_workspace_files(workspace)
@@ -635,6 +691,11 @@ async def handle_tcp_client_stdio(
     ios_pipeline: IOSBuildPipeline | None = None,
 ) -> None:
     assert proc.stdin and proc.stdout
+    session_list_request_ids: set[Any] = set()
+
+    def normalize_response(line: bytes) -> bytes:
+        return enrich_session_list_response(line, session_list_request_ids)
+
     t1 = asyncio.create_task(
         pipe_client_to_stdio(
             client_reader,
@@ -643,6 +704,7 @@ async def handle_tcp_client_stdio(
             workspace,
             upstream,
             ios_pipeline=ios_pipeline,
+            session_list_request_ids=session_list_request_ids,
         )
     )
     if drop_response_id is not None:
@@ -652,16 +714,20 @@ async def handle_tcp_client_stdio(
                 client_writer,
                 "stdio→tcp",
                 drop_response_id,
+                normalize=normalize_response,
                 on_line=ios_pipeline.observe_agent_line if ios_pipeline else None,
             )
         )
     else:
-        t2 = asyncio.create_task(pipe_stream(
-            proc.stdout,
-            client_writer,
-            "stdio→tcp",
-            on_line=ios_pipeline.observe_agent_line if ios_pipeline else None,
-        ))
+        t2 = asyncio.create_task(
+            pipe_stream(
+                proc.stdout,
+                client_writer,
+                "stdio→tcp",
+                normalize=normalize_response,
+                on_line=ios_pipeline.observe_agent_line if ios_pipeline else None,
+            )
+        )
     await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
     for t in (t1, t2):
         t.cancel()

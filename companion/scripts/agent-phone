@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-HOST="${GROK_ACP_HOST:-127.0.0.1}"
+HOST="${GROK_ACP_HOST:-0.0.0.0}"
 PORT="${GROK_ACP_PORT:-7391}"
 AGENT="${ACP_AGENT:-codex}"
 SIMULATOR="${GROK_START_SIMULATOR:-1}"
@@ -13,6 +13,7 @@ SIMULATOR_PORT="${GROK_SIMULATOR_PORT:-3200}"
 SERVE_SIM_VERSION="${SERVE_SIM_VERSION:-0.1.45}"
 USE_NGROK=0
 FORWARD_ARGS=()
+HAS_FORWARD_ARGS=0
 BRIDGE_PID=""
 SERVE_SIM_PID=""
 SIM_NGROK_PID=""
@@ -23,30 +24,37 @@ export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
 export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$HOME/Library/Application Support/GrokBuild/state}"
 export GROK_PROJECTS_ROOT="${GROK_PROJECTS_ROOT:-$HOME/.projects}"
-export GROK_IOS_WORKSTREAMS=1
+export GROK_IOS_PROJECTS=1
 mkdir -p "$GROK_COMPANION_CWD" "$GROK_COMPANION_STATE_DIR"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-simulator) SIMULATOR=0; shift ;;
-    --ngrok) USE_NGROK=1; FORWARD_ARGS+=("$1"); shift ;;
-    --ngrok-url) USE_NGROK=1; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
+    --ngrok) USE_NGROK=1; HAS_FORWARD_ARGS=1; FORWARD_ARGS+=("$1"); shift ;;
+    --ngrok-url) USE_NGROK=1; HAS_FORWARD_ARGS=1; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
     --projects-root) export GROK_PROJECTS_ROOT="$2"; shift 2 ;;
-    --port) PORT="$2"; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
-    -h|--help) SIMULATOR=0; FORWARD_ARGS+=("$1"); shift ;;
-    *) FORWARD_ARGS+=("$1"); shift ;;
+    --port) PORT="$2"; HAS_FORWARD_ARGS=1; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
+    -h|--help) SIMULATOR=0; HAS_FORWARD_ARGS=1; FORWARD_ARGS+=("$1"); shift ;;
+    *) HAS_FORWARD_ARGS=1; FORWARD_ARGS+=("$1"); shift ;;
   esac
 done
 
 echo "agent-phone: ${AGENT} ACP agent ← TLS+PIN on ${HOST}:${PORT}"
 echo "agent-phone: workspace=${GROK_COMPANION_CWD}"
-echo "agent-phone: new workstreams=${GROK_PROJECTS_ROOT}"
+echo "agent-phone: new projects=${GROK_PROJECTS_ROOT}"
+if LAN_COMPANION_URL="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" --port "$PORT" 2>/dev/null)"; then
+  echo "agent-phone: companion LAN=${LAN_COMPANION_URL/http:\/\//tcp:\/\/}"
+fi
 echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
 echo ""
 
 if [[ "$SIMULATOR" != "1" ]]; then
+  if [[ "$HAS_FORWARD_ARGS" -eq 1 ]]; then
+    exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+      --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}"
+  fi
   exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
-    --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}"
+    --real --agent "$AGENT" --host "$HOST" --port "$PORT"
 fi
 
 cleanup() {
@@ -154,13 +162,22 @@ fi
 echo "agent-phone: simulator=${SIM_NAME} (${SIM_UDID})"
 echo "agent-phone: simulator preview=${GROK_SIMULATOR_URL}"
 
-bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
-  --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}" &
+if [[ "$HAS_FORWARD_ARGS" -eq 1 ]]; then
+  bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+    --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${FORWARD_ARGS[@]}" &
+else
+  bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
+    --real --agent "$AGENT" --host "$HOST" --port "$PORT" &
+fi
 BRIDGE_PID=$!
 
 BRIDGE_READY=0
+BRIDGE_PROBE_HOST="$HOST"
+if [[ "$BRIDGE_PROBE_HOST" == "0.0.0.0" || "$BRIDGE_PROBE_HOST" == "::" ]]; then
+  BRIDGE_PROBE_HOST="127.0.0.1"
+fi
 for _ in {1..100}; do
-  if python3 - "$HOST" "$PORT" <<'PY'
+  if python3 - "$BRIDGE_PROBE_HOST" "$PORT" <<'PY'
 import socket
 import sys
 try:

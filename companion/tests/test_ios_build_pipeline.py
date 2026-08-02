@@ -19,11 +19,11 @@ import acp_tcp_bridge as BRIDGE
 def test_ios_build_requires_opt_in_and_simulator() -> None:
     assert not PIPELINE.ios_build_enabled({})
     assert not PIPELINE.ios_build_enabled({
-        "GROK_IOS_WORKSTREAMS": "1",
+        "GROK_IOS_PROJECTS": "1",
         "GROK_AUTO_BUILD_IOS": "1",
     })
     assert PIPELINE.ios_build_enabled({
-        "GROK_IOS_WORKSTREAMS": "1",
+        "GROK_IOS_PROJECTS": "1",
         "GROK_AUTO_BUILD_IOS": "1",
         "GROK_SIMULATOR_UDID": "device",
     })
@@ -58,20 +58,50 @@ def test_discovers_generated_project_and_scheme(tmp_path: Path) -> None:
     assert PIPELINE.find_scheme(project, flag, {"GROK_IOS_SCHEME": "Example"}) == "Example"
 
 
-def test_new_session_creates_and_selects_workstream_project(tmp_path: Path) -> None:
+def test_new_session_creates_and_selects_project(tmp_path: Path) -> None:
     pipeline = PIPELINE.IOSBuildPipeline(tmp_path, {})
     message = (json.dumps({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "session/new",
-        "params": {"cwd": "."},
+        "params": {"cwd": ".", "projectName": "Trail Notes"},
     }) + "\n").encode()
     with patch.dict("os.environ", {
-        "GROK_IOS_WORKSTREAMS": "1",
+        "GROK_IOS_PROJECTS": "1",
         "GROK_PROJECTS_ROOT": str(tmp_path),
     }, clear=False):
         normalized = BRIDGE.normalize_acp_line(message, tmp_path, pipeline)
     cwd = Path(json.loads(normalized)["params"]["cwd"])
     assert cwd.parent == tmp_path
-    assert (cwd / "WorkstreamApp.xcodeproj/project.pbxproj").is_file()
+    assert cwd.name.startswith("trail-notes-")
+    assert (cwd / "TrailNotes.xcodeproj/project.pbxproj").is_file()
+    assert "projectName" not in json.loads(normalized)["params"]
     assert pipeline.workspace == cwd
+
+
+def test_session_list_response_uses_project_metadata_name(tmp_path: Path) -> None:
+    project = tmp_path / "trail-notes-20260802-abc123"
+    project.mkdir()
+    (project / ".grok-build-project.json").write_text('{"name":"Trail Notes"}')
+    response = (json.dumps({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {"sessions": [{"sessionId": "session-1", "cwd": str(project)}]},
+    }) + "\n").encode()
+    normalized = BRIDGE.enrich_session_list_response(response, {7})
+    session = json.loads(normalized)["result"]["sessions"][0]
+    assert session["projectName"] == "Trail Notes"
+
+
+def test_session_list_response_falls_back_to_xcode_project_name(tmp_path: Path) -> None:
+    project = tmp_path / "existing-project"
+    project.mkdir()
+    (project / "ExistingProject.xcodeproj").mkdir()
+    response = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {"data": {"sessions": [{"sessionId": "session-2", "cwd": str(project)}]}},
+    }).encode()
+    normalized = BRIDGE.enrich_session_list_response(response, {8})
+    session = json.loads(normalized)["result"]["data"]["sessions"][0]
+    assert session["projectName"] == "ExistingProject"

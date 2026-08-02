@@ -3,7 +3,7 @@
 
 import SwiftUI
 
-/// Resume session picker (`SessionPickerEntry` rows: cwd / title / id).
+/// Resume Project picker (`SessionPickerEntry` rows: cwd / title / id).
 struct SessionPickerView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -14,7 +14,7 @@ struct SessionPickerView: View {
                 Button("←") { model.showWelcome() }
                     .font(.body.monospaced())
                     .foregroundStyle(theme.textSecondary)
-                Text("Resume session")
+                Text("Resume Project")
                     .font(.body.monospaced())
                     .foregroundStyle(theme.command)
                 Spacer()
@@ -58,7 +58,7 @@ struct SessionPickerView: View {
                                 model.resumeSession(id: entry.id, cwd: entry.cwd)
                             } label: {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.title)
+                                    Text(entry.displayName)
                                         .font(.body.monospaced())
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(2)
