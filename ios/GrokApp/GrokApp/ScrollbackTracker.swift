@@ -24,6 +24,24 @@ final class ScrollbackTracker {
         notify()
     }
 
+    /// Replace a loaded transcript with its final conversational message.
+    /// Session history can contain hundreds of tool/thinking updates that should
+    /// not be replayed into the compact phone UI.
+    func showOnlyLatestMessage(kind: ScrollbackKind?, text: String?) {
+        streamingAssistantID = nil
+        streamingThoughtID = nil
+        toolEntries.removeAll()
+        expandedVerbGroupIDs.removeAll()
+
+        let message = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let kind, (kind == .user || kind == .assistant), !message.isEmpty {
+            entries = [ScrollbackEntry(kind: kind, text: message)]
+        } else {
+            entries = []
+        }
+        notify()
+    }
+
     func appendUser(_ text: String) {
         entries.append(ScrollbackEntry(kind: .user, text: text))
         notify()

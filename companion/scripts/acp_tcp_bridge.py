@@ -40,12 +40,15 @@ from ios_build_pipeline import (  # noqa: E402
 from project_scaffold import create_project  # noqa: E402
 from project_registry import (  # noqa: E402
     project_for_session_id,
+    projects_root,
+    register_project,
     registered_projects,
     session_id_for_project,
 )
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7391
+DEFAULT_CODEX_ACP_VERSION = "1.1.12"
 WORKSPACE_LIST_METHOD = "workspace/list"
 SESSION_LIST_METHODS = {"session/list", "x.ai/session/list"}
 COMPANION_METHODS = {MERMAID_RENDER_METHOD, CONFIG_GET_METHOD, CONFIG_SET_METHOD}
@@ -96,7 +99,11 @@ def find_agent(
     if provider == "codex":
         npx = shutil.which("npx")
         if npx:
-            argv = [npx, "--yes", "@agentclientprotocol/codex-acp"]
+            version = os.environ.get(
+                "CODEX_ACP_VERSION",
+                DEFAULT_CODEX_ACP_VERSION,
+            ).strip() or DEFAULT_CODEX_ACP_VERSION
+            argv = [npx, "--yes", f"@agentclientprotocol/codex-acp@{version}"]
             if model:
                 config = json.dumps({"model": model}, separators=(",", ":"))
                 return ["/usr/bin/env", f"CODEX_CONFIG={config}", *argv]
@@ -227,6 +234,8 @@ def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
     sessions = payload.get("sessions") if isinstance(payload, dict) else None
     if not isinstance(sessions, list):
         return line
+    root = projects_root().expanduser().resolve()
+    filtered_sessions: list[dict[str, Any]] = []
     session_paths: set[Path] = set()
     for session in sessions:
         if not isinstance(session, dict):
@@ -234,15 +243,30 @@ def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
         cwd = session.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             continue
-        session_paths.add(Path(cwd).expanduser().resolve())
+        path = Path(cwd).expanduser().resolve()
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts or not path.is_dir():
+            continue
+        session_paths.add(path)
         project_name = project_name_for_workspace(cwd)
         if project_name:
             session["projectName"] = project_name
+        filtered_sessions.append(session)
+    payload["sessions"] = filtered_sessions
     for project in registered_projects():
         path = Path(project["path"]).resolve()
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
         if path in session_paths:
             continue
-        sessions.append({
+        filtered_sessions.append({
             "sessionId": session_id_for_project(path),
             "cwd": str(path),
             "title": project["name"],
@@ -504,6 +528,7 @@ def normalize_acp_line(
         )
         if project is not None:
             project_path = Path(project["path"])
+            register_project(project_path, project["name"])
             msg["method"] = "session/new"
             msg["params"] = {"cwd": str(project_path), "mcpServers": []}
             if ios_pipeline is not None:
@@ -518,7 +543,8 @@ def normalize_acp_line(
         if not isinstance(params, dict):
             params = {}
             msg["params"] = params
-        if ios_projects_enabled():
+        setup_only = params.pop("setupOnly", False) is True
+        if ios_projects_enabled() and not setup_only:
             project_name = params.pop("projectName", "ios-app")
             if not isinstance(project_name, str):
                 project_name = "ios-app"
@@ -544,6 +570,15 @@ def normalize_acp_line(
             path = Path(cwd).expanduser()
             if path.is_dir():
                 ios_pipeline.set_workspace(path)
+                registered = next(
+                    (
+                        project for project in registered_projects()
+                        if Path(project["path"]).resolve() == path.resolve()
+                    ),
+                    None,
+                )
+                if registered is not None:
+                    register_project(path, registered["name"])
     if ios_projects_enabled() and msg.get("method") == "session/prompt":
         msg = add_ios_policy(msg)
         text = json.dumps(msg, separators=(",", ":")) + ("\n" if text.endswith("\n") else "")
@@ -805,17 +840,27 @@ async def handle_tcp_client_stdio(
                 on_line=ios_pipeline.observe_agent_line if ios_pipeline else None,
             )
         )
-    await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
+    done, _ = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
+    client_closed = t1 in done
+    agent_closed = t2 in done
     for t in (t1, t2):
         t.cancel()
+    await asyncio.gather(t1, t2, return_exceptions=True)
+    terminated_for_cleanup = False
     if proc.returncode is None:
+        terminated_for_cleanup = True
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=3)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-    log(f"agent process exited with status {proc.returncode}")
+    if terminated_for_cleanup and client_closed:
+        log("client transport closed; ACP agent stopped (expected cleanup)")
+    elif agent_closed:
+        log(f"ACP agent stream closed; process status {proc.returncode}")
+    else:
+        log(f"ACP agent process exited with status {proc.returncode}")
 
 
 async def run_server(

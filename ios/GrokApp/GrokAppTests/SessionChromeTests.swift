@@ -5,6 +5,23 @@ import XCTest
 @testable import GrokApp
 
 final class SessionChromeTests: XCTestCase {
+    @MainActor
+    func testLoadedHistoryKeepsOnlyLatestConversationMessage() {
+        let tracker = ScrollbackTracker()
+        tracker.appendUser("Earlier request")
+        tracker.handleSessionUpdate([
+            "sessionUpdate": .string("tool_call"),
+            "toolCallId": .string("tool-1"),
+            "title": .string("Build"),
+            "status": .string("completed"),
+        ])
+        tracker.showOnlyLatestMessage(kind: .assistant, text: "Most recent reply")
+
+        XCTAssertEqual(tracker.entries.count, 1)
+        XCTAssertEqual(tracker.entries.first?.kind, .assistant)
+        XCTAssertEqual(tracker.entries.first?.text, "Most recent reply")
+    }
+
     func testFmtTokensMatchesUpstreamContextBar() {
         XCTAssertEqual(SessionChrome.fmtTokens(0), "0")
         XCTAssertEqual(SessionChrome.fmtTokens(999), "999")

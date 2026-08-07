@@ -10,6 +10,8 @@ struct CompanionPeer: Identifiable, Equatable {
     let endpoint: NWEndpoint
     /// Full SHA-256 DER fingerprint from Bonjour TXT `fp=` (64 hex).
     let fingerprint: String?
+    /// Public TCP endpoint advertised by `agent-phone --ngrok`.
+    let remoteEndpoint: String?
     /// First 16 hex for UI.
     var fingerprintShort: String? {
         guard let fingerprint, fingerprint.count >= 16 else { return fingerprint }
@@ -53,15 +55,23 @@ final class CompanionBrowser: ObservableObject {
                 guard let self else { return }
                 self.peers = results.compactMap { result in
                     let fp = Self.txtFingerprint(result.metadata)
+                    let remote = Self.txtRemoteEndpoint(result.metadata)
                     guard case .service(let name, _, _, _) = result.endpoint else {
                         return CompanionPeer(
                             id: String(describing: result.endpoint),
                             name: "Grok Build",
                             endpoint: result.endpoint,
-                            fingerprint: fp
+                            fingerprint: fp,
+                            remoteEndpoint: remote
                         )
                     }
-                    return CompanionPeer(id: name, name: name, endpoint: result.endpoint, fingerprint: fp)
+                    return CompanionPeer(
+                        id: name,
+                        name: name,
+                        endpoint: result.endpoint,
+                        fingerprint: fp,
+                        remoteEndpoint: remote
+                    )
                 }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }
@@ -90,5 +100,14 @@ final class CompanionBrowser: ObservableObject {
             return fp
         }
         return nil
+    }
+
+    private static func txtRemoteEndpoint(_ metadata: NWBrowser.Result.Metadata) -> String? {
+        guard case .bonjour(let txt) = metadata,
+              let value = txt.dictionary["remote"],
+              CompanionConfig.parseRemoteAddress(value) != nil else {
+            return nil
+        }
+        return value
     }
 }

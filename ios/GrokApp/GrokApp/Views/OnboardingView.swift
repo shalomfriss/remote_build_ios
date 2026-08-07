@@ -118,6 +118,8 @@ struct OnboardingView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(theme.textSecondary)
             TextField("from agent-phone", text: $model.pairPinDraft)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.title3.monospaced())

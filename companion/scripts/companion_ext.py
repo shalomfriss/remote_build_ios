@@ -15,10 +15,17 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from project_registry import (
+    latest_registered_project,
+    registered_projects,
+    session_id_for_project,
+)
+
 MERMAID_RENDER_METHOD = "x.ai/companion/mermaid_render"
 CONFIG_GET_METHOD = "x.ai/companion/config_get"
 CONFIG_SET_METHOD = "x.ai/companion/config_set"
 SIMULATOR_INFO_METHOD = "x.ai/companion/simulator_info"
+LAST_PROJECT_METHOD = "x.ai/companion/last_project"
 
 # Shell-owned `[ui]` keys we expose to iOS (settings/defs.rs).
 UI_BOOL_KEYS = {
@@ -263,6 +270,7 @@ def handle_companion_rpc(
         CONFIG_GET_METHOD,
         CONFIG_SET_METHOD,
         SIMULATOR_INFO_METHOD,
+        LAST_PROJECT_METHOD,
     ):
         return None
     req_id = msg.get("id")
@@ -317,6 +325,18 @@ def handle_companion_rpc(
             "id": req_id,
             "result": simulator_info(),
         }
+        return (json.dumps(body) + "\n").encode("utf-8")
+
+    if method == LAST_PROJECT_METHOD:
+        project = latest_registered_project()
+        result = None
+        if project is not None:
+            result = {
+                "sessionId": session_id_for_project(project["path"]),
+                "cwd": project["path"],
+                "projectName": project["name"],
+            }
+        body = {"jsonrpc": "2.0", "id": req_id, "result": result}
         return (json.dumps(body) + "\n").encode("utf-8")
 
     return None

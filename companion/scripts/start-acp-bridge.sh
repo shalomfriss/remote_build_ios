@@ -24,6 +24,7 @@ NGROK_PID=""
 NGROK_LOG=""
 USE_NGROK=0
 NGROK_URL="${GROK_NGROK_URL:-}"
+REMOTE_ENDPOINT="${GROK_REMOTE_ENDPOINT:-}"
 
 usage() {
   cat <<'EOF'
@@ -105,13 +106,6 @@ echo "[start-acp-bridge] PIN: ${GROK_COMPANION_PIN}"
 echo "[start-acp-bridge] cert fingerprint: ${GROK_COMPANION_FP}"
 echo "[start-acp-bridge] cert fingerprint (short): ${GROK_COMPANION_FP_SHORT}"
 
-if [[ "$ADVERTISE" -eq 1 ]] && command -v dns-sd >/dev/null 2>&1; then
-  # Full DER SHA-256 in TXT so the phone can pin without pasting.
-  dns-sd -R "Coding Agent" _grok-build._tcp local "$PORT" "fp=${GROK_COMPANION_FP}" "fps=${GROK_COMPANION_FP_SHORT}" >/dev/null 2>&1 &
-  DNS_PID=$!
-  echo "[start-acp-bridge] Bonjour: Coding Agent _grok-build._tcp :${PORT} (fp in TXT)"
-fi
-
 echo "[start-acp-bridge] workspace=${GROK_COMPANION_CWD}"
 echo "[start-acp-bridge] agent=${AGENT}${MODEL:+ model=${MODEL}}"
 
@@ -156,6 +150,24 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
     echo "[start-acp-bridge] ngrok endpoint: ${NGROK_ENDPOINT}"
     echo "[start-acp-bridge] paste that endpoint and the PIN into the iOS app"
   fi
+fi
+
+if [[ "$ADVERTISE" -eq 1 ]] && command -v dns-sd >/dev/null 2>&1; then
+  # Include the public endpoint so the phone can retain it for cellular failover.
+  if [[ -z "$REMOTE_ENDPOINT" && -n "${NGROK_PID:-}" && -n "${NGROK_ENDPOINT:-}" ]]; then
+    REMOTE_ENDPOINT="$NGROK_ENDPOINT"
+  fi
+  if [[ -n "$REMOTE_ENDPOINT" ]]; then
+    dns-sd -R "Coding Agent" _grok-build._tcp local "$PORT" \
+      "fp=${GROK_COMPANION_FP}" "fps=${GROK_COMPANION_FP_SHORT}" \
+      "remote=${REMOTE_ENDPOINT}" >/dev/null 2>&1 &
+    echo "[start-acp-bridge] Bonjour: Coding Agent _grok-build._tcp :${PORT} (fp + remote endpoint in TXT)"
+  else
+    dns-sd -R "Coding Agent" _grok-build._tcp local "$PORT" \
+      "fp=${GROK_COMPANION_FP}" "fps=${GROK_COMPANION_FP_SHORT}" >/dev/null 2>&1 &
+    echo "[start-acp-bridge] Bonjour: Coding Agent _grok-build._tcp :${PORT} (fp in TXT)"
+  fi
+  DNS_PID=$!
 fi
 
 python3 "$BRIDGE_PY" "${ARGS[@]}" &

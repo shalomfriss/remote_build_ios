@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 import os
 import plistlib
@@ -14,6 +15,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+from project_registry import latest_registered_project
 
 
 IOS_POLICY_MARKER = "[grok-build-ios-target]"
@@ -258,6 +261,66 @@ def build_and_launch(
     }
 
 
+def write_build_state(state_file: Path, value: dict[str, Any]) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = state_file.with_suffix(state_file.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(state_file)
+
+
+def launch_latest_registered_project(
+    env: Mapping[str, str] = os.environ,
+) -> dict[str, Any]:
+    """Build and launch the newest Grok Build project when the companion starts."""
+    project = latest_registered_project(env)
+    state_dir = Path(env.get("GROK_COMPANION_STATE_DIR", str(Path.home() / ".grok")))
+    state_file = Path(
+        env.get("GROK_SIMULATOR_STATE_FILE", str(state_dir / "simulator-build.json"))
+    )
+    if project is None:
+        result: dict[str, Any] = {"status": "idle", "generation": 0}
+        write_build_state(state_file, result)
+        return result
+
+    udid = env.get("GROK_SIMULATOR_UDID", "").strip()
+    if not udid:
+        result = {
+            "status": "failed",
+            "generation": 0,
+            "error": "No project simulator is configured.",
+        }
+        write_build_state(state_file, result)
+        return result
+
+    derived_data = Path(
+        env.get("GROK_IOS_DERIVED_DATA", str(state_dir / "GeneratedAppDerivedData"))
+    )
+    write_build_state(state_file, {
+        "status": "building",
+        "generation": 0,
+        "projectName": project["name"],
+    })
+    try:
+        build = build_and_launch(Path(project["path"]), udid, derived_data, env)
+    except Exception as error:
+        log(str(error))
+        result = {
+            "status": "failed",
+            "generation": 0,
+            "projectName": project["name"],
+            "error": str(error),
+        }
+    else:
+        result = {
+            "status": "ready",
+            "generation": 0,
+            "projectName": project["name"],
+            **build,
+        }
+    write_build_state(state_file, result)
+    return result
+
+
 class IOSBuildPipeline:
     """Coalesce completed turns into serialized simulator builds."""
 
@@ -315,9 +378,24 @@ class IOSBuildPipeline:
 
     def _write_state(self, value: dict[str, Any]) -> None:
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
-            temporary.replace(self.state_file)
+            write_build_state(self.state_file, value)
         except OSError as error:
             log(f"could not write simulator state: {error}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--launch-latest",
+        action="store_true",
+        help="Build and launch the most recently registered Grok Build project",
+    )
+    args = parser.parse_args(argv)
+    if not args.launch_latest:
+        parser.error("--launch-latest is required")
+    print(json.dumps(launch_latest_registered_project()))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -47,6 +47,13 @@ final class ACPProtocolTests: XCTestCase {
     func testSessionNewIncludesTrimmedProjectName() {
         let params = ACPProtocol.sessionNewParams(projectName: "  Trail Notes  ")
         XCTAssertEqual(params["projectName"]?.stringValue, "Trail Notes")
+        XCTAssertNil(params["setupOnly"])
+    }
+
+    func testSetupSessionDoesNotRequestProjectCreation() {
+        let params = ACPProtocol.sessionNewParams()
+        XCTAssertEqual(params["setupOnly"]?.boolValue, true)
+        XCTAssertNil(params["projectName"])
     }
 
     func testSessionListEntryPrefersProjectName() {

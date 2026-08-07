@@ -7,7 +7,7 @@ The phone keeps the Grok Build pager UI and ACP harness. Your Mac runs Codex, Cl
 **Author:** Pedro Shakour  
 **License:** Apache-2.0
 
-![Welcome screen](docs/welcome.png)
+Welcome screen
 
 ## Requirements
 
@@ -28,7 +28,11 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
+
+
 ## Quick start
+
+
 
 ### 1. Start an agent on your Mac
 
@@ -55,12 +59,16 @@ The bridge prints a six-digit **PIN**. Leave this terminal open. Authenticate wi
 
 Agent prerequisites:
 
-| Backend | ACP command used by the bridge |
-|---------|--------------------------------|
-| Codex | `npx @agentclientprotocol/codex-acp` (maintained adapter with compatible Codex runtime) |
-| Claude | `claude-agent-acp`, or `npx @agentclientprotocol/claude-agent-acp` |
-| Local | `opencode acp` with an injected, Ollama-only configuration |
-| Custom | `ACP_AGENT_COMMAND='your-acp-agent --stdio'` |
+
+| Backend | ACP command used by the bridge                                                          |
+| ------- | --------------------------------------------------------------------------------------- |
+| Codex   | `npx @agentclientprotocol/codex-acp@1.1.12` (maintained adapter; override with `CODEX_ACP_VERSION`) |
+| Claude  | `claude-agent-acp`, or `npx @agentclientprotocol/claude-agent-acp`                      |
+| Local   | `opencode acp` with an injected, Ollama-only configuration                              |
+| Custom  | `ACP_AGENT_COMMAND='your-acp-agent --stdio'`                                            |
+
+
+
 
 ### 2. Run the iOS app
 
@@ -72,14 +80,29 @@ Or:
 ./scripts/run-simulator-demo.sh
 ```
 
+To install a signed build that runs without Xcode or a USB connection, use the
+[standalone iPhone installation guide](docs/standalone-ios.md). The recommended
+path is TestFlight:
+
+```bash
+./ios/GrokApp/scripts/distribute-standalone.sh --upload
+```
+
+
+
 ### 3. Connect
 
 In the app: **Setup** → paste the PIN → **connect** → **continue** → **New worktree**.
 
-| Client | Host | Port |
-|--------|------|------|
-| Simulator | `127.0.0.1` | `7391` |
+
+| Client                       | Host            | Port   |
+| ---------------------------- | --------------- | ------ |
+| Simulator                    | `127.0.0.1`     | `7391` |
 | Physical iPhone (same Wi‑Fi) | your Mac LAN IP | `7391` |
+| Physical iPhone (cellular)   | ngrok TCP host  | printed port |
+
+
+
 
 ## Architecture
 
@@ -91,14 +114,18 @@ The bridge reuses the existing pairing, permission, session, tool-call, and scro
 
 ## Repo layout
 
-| Path | Purpose |
-|------|---------|
-| `ios/GrokApp/` | SwiftUI app |
-| `companion/` | Provider-neutral ACP TCP/TLS bridge |
-| `shared/` | Themes + slash catalog from upstream |
+
+| Path                   | Purpose                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| `ios/GrokApp/`         | SwiftUI app                                                                  |
+| `companion/`           | Provider-neutral ACP TCP/TLS bridge                                          |
+| `shared/`              | Themes + slash catalog from upstream                                         |
 | `upstream-grok-build/` | Pinned [xai-org/grok-build](https://github.com/xai-org/grok-build) submodule |
-| `scripts/` | Demo + smoke helpers |
-| `docs/` | Screenshots |
+| `scripts/`             | Demo + smoke helpers                                                         |
+| `docs/`                | Screenshots                                                                  |
+
+
+
 
 ## Development
 
@@ -113,16 +140,19 @@ Stub ACP (CI / no API key):
 ./scripts/run-simulator-stub-demo.sh
 ```
 
+
+
 ## Notes
 
-- Not on the App Store — open-source / sideload / Simulator only.
+- TestFlight and registered-device distribution are supported for standalone installation.
 - Agent runtime and provider credentials stay on the Mac; the phone is a remote pager.
 - Codex and Claude may still have their own subscription/API costs. The local Ollama path has no per-token gateway fee.
 - Themes and slash names are taken from upstream Grok Build.
 
+
+
 ## License
 
 Apache-2.0. See `LICENSE`, `NOTICE`, and `THIRD-PARTY-NOTICES`.
-
 
 ./companion/scripts/agent-phone --ngrok

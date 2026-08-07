@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
-import WebKit
+import UIKit
 
 struct RemoteSimulatorView: View {
     @EnvironmentObject private var model: AppModel
@@ -23,10 +23,11 @@ struct RemoteSimulatorView: View {
                     }
                 } else if let url = model.simulatorURL {
                     SimulatorWebView(
-                        url: url,
+                        url: previewURL(for: url),
                         fillsViewport: isFullScreen,
                         error: $webError
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView {
                         Label("Simulator unavailable", systemImage: "iphone.slash")
@@ -62,17 +63,18 @@ struct RemoteSimulatorView: View {
                         Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: onToggleFullScreen)
                             .labelStyle(.iconOnly)
                             .buttonStyle(.bordered)
+                            .tint(.orange)
                             .buttonBorderShape(.circle)
                             .controlSize(.large)
                             .frame(minWidth: 44, minHeight: 44)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, 82)
-                .padding(.bottom, 4)
-                .offset(y: 10)
+                .padding(.trailing, 30)
+                .padding(.bottom, 32)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(model.theme.bgBase)
         .task {
             // The tab remains mounted beneath the full-screen cover and owns the
@@ -86,6 +88,18 @@ struct RemoteSimulatorView: View {
         webError = nil
         Task { await model.refreshSimulatorURL() }
     }
+
+    private func previewURL(for url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        var queryItems = components.queryItems ?? []
+        if !queryItems.contains(where: { $0.name == "codec" }) {
+            queryItems.append(URLQueryItem(name: "codec", value: "mjpeg"))
+            components.queryItems = queryItems
+        }
+        return components.url ?? url
+    }
 }
 
 private struct SimulatorWebView: UIViewRepresentable {
@@ -93,94 +107,146 @@ private struct SimulatorWebView: UIViewRepresentable {
     let fillsViewport: Bool
     @Binding var error: String?
 
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: """
-                const style = document.createElement('style');
-                style.textContent = `
-                    a[href*="github.com/EvanBacon/serve-sim"],
-                    a[aria-label="Open serve-sim"] {
-                        display: none !important;
-                    }
-                    button[aria-label="Open WebKit DevTools"] {
-                        display: none !important;
-                    }
-                `;
-                document.documentElement.appendChild(style);
-                """,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
-        if fillsViewport {
-            // serve-sim restores its last simulator width from localStorage after
-            // stream metadata arrives. Give the full-screen preview isolated
-            // storage with the maximum scale so that late restore still fits the
-            // expanded viewport instead of snapping back to the tab's width.
-            configuration.websiteDataStore = .nonPersistent()
-            configuration.userContentController.addUserScript(
-                WKUserScript(
-                    source: "localStorage.setItem('serve-sim:simulator-frame-scale', '3')",
-                    injectionTime: .atDocumentStart,
-                    forMainFrameOnly: true
-                )
-            )
-        }
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        return webView
+    func makeUIView(context: Context) -> SimulatorImageView {
+        let imageView = SimulatorImageView()
+        imageView.backgroundColor = .clear
+        imageView.contentMode = .scaleAspectFit
+        imageView.clipsToBounds = true
+        context.coordinator.imageView = imageView
+        return imageView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        guard webView.url != url else { return }
-        webView.load(URLRequest(url: url))
+    func updateUIView(_ imageView: SimulatorImageView, context: Context) {
+        imageView.contentMode = .scaleAspectFit
+        context.coordinator.start(baseURL: url)
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(error: $error)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleUIView(_ uiView: SimulatorImageView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         private let error: Binding<String?>
+        private var discoveryTask: URLSessionDataTask?
+        private var streamTask: URLSessionDataTask?
+        private var streamSession: URLSession?
+        private var buffer = Data()
+        private var currentBaseURL: URL?
+        weak var imageView: UIImageView?
 
         init(error: Binding<String?>) {
             self.error = error
         }
 
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationResponse: WKNavigationResponse,
-            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
-        ) {
-            if let response = navigationResponse.response as? HTTPURLResponse,
-               response.statusCode >= 400 {
-                error.wrappedValue = "The simulator endpoint returned HTTP \(response.statusCode). Restart agent-phone or check the tunnel."
-                decisionHandler(.cancel)
+        func start(baseURL: URL) {
+            guard currentBaseURL != baseURL else { return }
+            stop()
+            currentBaseURL = baseURL
+
+            guard let apiURL = endpointURL(path: "/api", relativeTo: baseURL) else {
+                report("The simulator endpoint is invalid.")
                 return
             }
-            decisionHandler(.allow)
+
+            discoveryTask = URLSession.shared.dataTask(with: apiURL) { [weak self] data, response, requestError in
+                guard let self, self.currentBaseURL == baseURL else { return }
+                if let requestError {
+                    self.report(requestError.localizedDescription)
+                    return
+                }
+                guard let http = response as? HTTPURLResponse, http.statusCode < 400,
+                      let data,
+                      let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let advertisedStream = payload["streamUrl"] as? String,
+                      let streamURL = URL(string: advertisedStream),
+                      let reachableStreamURL = self.endpointURL(
+                        path: streamURL.path,
+                        relativeTo: baseURL
+                      ) else {
+                    self.report("The simulator did not provide a usable video stream.")
+                    return
+                }
+                self.openStream(reachableStreamURL)
+            }
+            discoveryTask?.resume()
         }
 
-        func webView(
-            _ webView: WKWebView,
-            didFailProvisionalNavigation navigation: WKNavigation?,
-            withError error: Error
-        ) {
-            self.error.wrappedValue = error.localizedDescription
+        func stop() {
+            discoveryTask?.cancel()
+            streamTask?.cancel()
+            streamSession?.invalidateAndCancel()
+            discoveryTask = nil
+            streamTask = nil
+            streamSession = nil
+            buffer.removeAll(keepingCapacity: false)
+            currentBaseURL = nil
         }
 
-        func webView(
-            _ webView: WKWebView,
-            didFail navigation: WKNavigation?,
-            withError error: Error
+        private func openStream(_ streamURL: URL) {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 30
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+            streamSession = session
+            streamTask = session.dataTask(with: streamURL)
+            streamTask?.resume()
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            buffer.append(data)
+            let startMarker = Data([0xFF, 0xD8])
+            let endMarker = Data([0xFF, 0xD9])
+
+            while let start = buffer.range(of: startMarker),
+                  let end = buffer.range(of: endMarker, in: start.lowerBound..<buffer.endIndex) {
+                let frame = buffer.subdata(in: start.lowerBound..<end.upperBound)
+                buffer.removeSubrange(buffer.startIndex..<end.upperBound)
+                guard let image = UIImage(data: frame) else { continue }
+                DispatchQueue.main.async { [weak self] in
+                    self?.error.wrappedValue = nil
+                    self?.imageView?.image = image
+                }
+            }
+
+            if buffer.count > 12_000_000 {
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didCompleteWithError completionError: Error?
         ) {
-            self.error.wrappedValue = error.localizedDescription
+            if let completionError = completionError as? URLError,
+               completionError.code != .cancelled {
+                report(completionError.localizedDescription)
+            }
+        }
+
+        private func endpointURL(path: String, relativeTo baseURL: URL) -> URL? {
+            guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+                return nil
+            }
+            components.path = path
+            components.query = nil
+            components.fragment = nil
+            return components.url
+        }
+
+        private func report(_ message: String) {
+            DispatchQueue.main.async { [weak self] in
+                self?.error.wrappedValue = message
+            }
         }
     }
+}
+
+private final class SimulatorImageView: UIImageView {
+    override var intrinsicContentSize: CGSize { .zero }
 }

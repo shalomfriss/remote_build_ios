@@ -15,6 +15,7 @@ enum ACPProtocol {
     static let companionConfigSetMethod = "x.ai/companion/config_set"
     static let companionSimulatorInfoMethod = "x.ai/companion/simulator_info"
     static let companionSimulatorRunMethod = "x.ai/companion/simulator_run"
+    static let companionLastProjectMethod = "x.ai/companion/last_project"
     static let billingMethod = "x.ai/billing"
     static let pairPrefix = "grok_pair"
     static let pairResultPrefix = "grok_pair_result"
@@ -182,6 +183,11 @@ enum ACPProtocol {
             // Companion-only extension. The bridge removes it before forwarding
             // session/new to the provider.
             params["projectName"] = .string(projectName)
+        } else {
+            // Connecting is not the same as creating a project. The bridge uses
+            // this flag to initialize ACP in its existing workspace only when
+            // there is no previous project to resume.
+            params["setupOnly"] = .bool(true)
         }
         return .object(params)
     }

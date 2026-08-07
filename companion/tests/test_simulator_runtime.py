@@ -29,3 +29,10 @@ def test_prefers_booted_ios_device() -> None:
 def test_resolves_preferred_name_or_udid() -> None:
     assert RUNTIME.select_device(DEVICES, "iPhone Air") == {"name": "iPhone Air", "udid": "shutdown"}
     assert RUNTIME.select_device(DEVICES, "missing") is None
+
+
+def test_excludes_controller_simulator_for_project_app() -> None:
+    assert RUNTIME.select_device(DEVICES, excluded_udids={"booted"}) == {
+        "name": "iPhone Air",
+        "udid": "shutdown",
+    }

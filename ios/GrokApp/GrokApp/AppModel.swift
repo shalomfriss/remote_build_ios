@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
     @Published var simulatorURL: URL?
     @Published var simulatorBuildStatus: String?
     @Published var simulatorBuildError: String?
+    @Published private(set) var isSimulatorRunPending = false
     @Published var isNamingProject = false
     @Published var projectNameDraft = ""
 
@@ -142,7 +143,9 @@ final class AppModel: ObservableObject {
     func loadConnectionDrafts() {
         apiKeyDraft = KeychainHelper.loadAPIKey() ?? ""
         let ep = CompanionConfig.resolved()
-        acpHostDraft = ep.host
+        acpHostDraft = ep.useWebSocket
+            ? "\(ep.useTLS ? "wss" : "ws")://\(ep.host)/acp"
+            : ep.host
         acpPortDraft = String(ep.port)
         pairPinDraft = CompanionConfig.savedPIN
         fingerprintDraft = CompanionConfig.pinnedFingerprint
@@ -386,18 +389,29 @@ final class AppModel: ObservableObject {
         acp.reconnect(preserveSessionId: resumeId)
         Task { @MainActor in
             defer { self.isReconnecting = false }
-            let deadline = Date().addingTimeInterval(20)
-            while Date() < deadline {
+            var deadline = Date.now.addingTimeInterval(20)
+            var triedRemoteFallback = false
+            while Date.now < deadline {
                 if self.acp.sessionReady {
                     self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
                 }
                 if let err = self.acp.lastError, !err.isEmpty {
+                    if !triedRemoteFallback,
+                       self.preferredBonjourEndpoint != nil,
+                       CompanionConfig.hasRemoteEndpoint {
+                        triedRemoteFallback = true
+                        self.clearBonjourPreference()
+                        self.reconnectBanner = "Switching to remote connection…"
+                        self.acp.reconnect(preserveSessionId: resumeId, cwd: self.chrome.cwd)
+                        deadline = Date.now.addingTimeInterval(20)
+                        continue
+                    }
                     self.reconnectBanner = err
                     return
                 }
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try? await Task.sleep(for: .milliseconds(250))
             }
             self.reconnectBanner = "Could not reconnect — open Setup"
         }
@@ -471,7 +485,11 @@ final class AppModel: ObservableObject {
             // briefly expose a paired transport with no usable session.
             if self.acp.isConnected, self.acp.isPaired, self.acp.sessionReady {
                 do {
-                    try await self.acp.loadSession(id, cwd: cwd)
+                    try await self.acp.loadSession(
+                        id,
+                        cwd: cwd,
+                        showLatestMessage: true
+                    )
                     guard !Task.isCancelled else { return }
                     self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
@@ -486,7 +504,11 @@ final class AppModel: ObservableObject {
 
             // If the transport genuinely went away while the picker was open,
             // reconnect and ask the new ACP connection to load the selected session.
-            self.acp.reconnect(preserveSessionId: id, cwd: cwd)
+            self.acp.reconnect(
+                preserveSessionId: id,
+                cwd: cwd,
+                showLatestMessage: true
+            )
             let deadline = Date.now.addingTimeInterval(30)
             while Date.now < deadline {
                 if Task.isCancelled { return }
@@ -518,10 +540,20 @@ final class AppModel: ObservableObject {
     func selectBonjourPeer(_ peer: CompanionPeer) {
         preferredBonjourEndpoint = peer.endpoint
         acp.setPreferredEndpoint(peer.endpoint)
+        if let endpoint = peer.remoteEndpoint,
+           let remote = CompanionConfig.parseRemoteAddress(endpoint) {
+            CompanionConfig.save(
+                host: remote.host,
+                port: remote.port,
+                useTLS: remote.useTLS,
+                useWebSocket: remote.useWebSocket
+            )
+        }
         if let fp = peer.fingerprint, !fp.isEmpty {
             fingerprintDraft = fp
         }
-        CompanionConfig.save(host: "", port: CompanionConfig.resolved().port, useTLS: true, useWebSocket: false)
+        // Bonjour is only an in-memory preference. Preserve a public endpoint
+        // so reconnect can fail over when the phone leaves Wi-Fi.
         acpHostDraft = peer.name
         setupError = nil
         connectionPhase = .idle
@@ -544,11 +576,20 @@ final class AppModel: ObservableObject {
             return
         }
 
-        if preferredBonjourEndpoint == nil {
-            if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
-                acpHostDraft = remote.host
-                acpPortDraft = String(remote.port)
-            }
+        if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
+            preferredBonjourEndpoint = nil
+            acp.setPreferredEndpoint(nil)
+            acpHostDraft = remote.host
+            acpPortDraft = String(remote.port)
+            CompanionConfig.save(
+                host: remote.host,
+                port: remote.port,
+                useTLS: remote.useTLS,
+                useWebSocket: remote.useWebSocket
+            )
+        } else if preferredBonjourEndpoint == nil {
+            preferredBonjourEndpoint = nil
+            acp.setPreferredEndpoint(nil)
             if acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 acpHostDraft = "127.0.0.1"
             }
@@ -558,15 +599,6 @@ final class AppModel: ObservableObject {
             let port = Int(acpPortDraft) ?? CompanionConfig.defaultPort
             let host = acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             CompanionConfig.save(host: host, port: port, useTLS: true, useWebSocket: false)
-            acp.setPreferredEndpoint(nil)
-        } else {
-            // Legacy Bonjour TCP+TLS bridge peers.
-            CompanionConfig.save(
-                host: "",
-                port: CompanionConfig.resolved().port,
-                useTLS: true,
-                useWebSocket: false
-            )
         }
 
         let optionalFP = fingerprintDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -575,14 +607,14 @@ final class AppModel: ObservableObject {
         Task { await verifyCompanionConnection() }
     }
 
-    /// After successful probe — land on Welcome (user taps Continue).
+    /// After a successful probe, open the project restored by the ACP handshake.
     func finishSetupAfterSuccessfulConnect() {
         guard case .succeeded = connectionPhase else { return }
         CompanionConfig.isOnboarded = true
         companionBrowser.stop()
-        // Keep ACP session alive — do not reset tracker/session here.
+        // Keep the restored ACP session alive; showAgent reuses it.
         connectionPhase = .succeeded
-        showWelcome()
+        showAgent()
     }
 
     private func verifyCompanionConnection(allowBonjourFallback: Bool = true) async {
@@ -599,6 +631,9 @@ final class AppModel: ObservableObject {
         while Date() < deadline {
             if Task.isCancelled { return }
             if let err = acp.lastError, !err.isEmpty {
+                if await retryWithRemoteCompanion() {
+                    return
+                }
                 if allowBonjourFallback, await retryWithDiscoveredCompanion(after: err) {
                     return
                 }
@@ -621,12 +656,27 @@ final class AppModel: ObservableObject {
         }
         let msg = acp.lastError
             ?? "Could not reach agent — is `agent-phone` running?"
+        if await retryWithRemoteCompanion() {
+            return
+        }
         if allowBonjourFallback, await retryWithDiscoveredCompanion(after: msg) {
             return
         }
         connectionPhase = .failed(msg)
         setupError = msg
         acp.disconnect()
+    }
+
+    private func retryWithRemoteCompanion() async -> Bool {
+        guard preferredBonjourEndpoint != nil,
+              CompanionConfig.hasRemoteEndpoint else {
+            return false
+        }
+        clearBonjourPreference()
+        connectionPhase = .checking
+        setupError = "LAN connection unavailable. Trying the remote endpoint…"
+        await verifyCompanionConnection(allowBonjourFallback: false)
+        return true
     }
 
     private func retryWithDiscoveredCompanion(after error: String) async -> Bool {
@@ -669,6 +719,15 @@ final class AppModel: ObservableObject {
         if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
             acpHostDraft = remote.host
             acpPortDraft = String(remote.port)
+            CompanionConfig.save(
+                host: remote.host,
+                port: remote.port,
+                useTLS: remote.useTLS,
+                useWebSocket: remote.useWebSocket
+            )
+            preferredBonjourEndpoint = nil
+            acp.setPreferredEndpoint(nil)
+            return
         }
         let port = Int(acpPortDraft.trimmingCharacters(in: .whitespacesAndNewlines))
             ?? CompanionConfig.defaultPort
@@ -735,21 +794,56 @@ final class AppModel: ObservableObject {
     var canRunCurrentProject: Bool {
         acp.sessionReady
             && !acp.isRunning
-            && simulatorBuildStatus != "queued"
-            && simulatorBuildStatus != "building"
+            && !isSimulatorRunInProgress
+    }
+
+    var isSimulatorRunInProgress: Bool {
+        isSimulatorRunPending
+            || simulatorBuildStatus == "queued"
+            || simulatorBuildStatus == "building"
     }
 
     func runCurrentProject() {
         guard canRunCurrentProject else { return }
+        acp.tracker.appendUser("run the project")
+        isSimulatorRunPending = true
+        simulatorBuildStatus = "queued"
+        simulatorBuildError = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
+            let minimumIndicatorEnd = ContinuousClock.now.advanced(by: .seconds(1))
             do {
                 try await self.acp.runSimulatorApp()
-                await self.refreshSimulatorURL()
+                await self.waitForSimulatorBuild()
             } catch {
+                self.simulatorBuildStatus = "failed"
+                self.simulatorBuildError = error.localizedDescription
                 self.acp.tracker.appendError(error.localizedDescription)
             }
+            let remaining = ContinuousClock.now.duration(to: minimumIndicatorEnd)
+            if remaining > .zero {
+                try? await Task.sleep(for: remaining)
+            }
+            self.isSimulatorRunPending = false
         }
+    }
+
+    private func waitForSimulatorBuild() async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(300))
+        repeat {
+            await refreshSimulatorURL()
+            if simulatorBuildStatus == "ready" || simulatorBuildStatus == "failed" {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        } while !Task.isCancelled && ContinuousClock.now < deadline
+
+        guard simulatorBuildStatus == "queued" || simulatorBuildStatus == "building" else {
+            return
+        }
+        simulatorBuildStatus = "failed"
+        simulatorBuildError = "The simulator build timed out. Check the companion output."
+        acp.tracker.appendError(simulatorBuildError ?? "The simulator build timed out.")
     }
 
     func requestNewProject() {

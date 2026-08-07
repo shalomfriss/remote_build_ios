@@ -30,13 +30,25 @@ struct AgentWorkspaceView: View {
             Group {
                 if selectedTab == .speech {
                     if !model.isPromptFocused {
-                        Button("Run", systemImage: "play.fill", action: runProject)
-                            .labelStyle(.iconOnly)
+                        Button(action: runProject) {
+                            if model.isSimulatorRunInProgress {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("Run project", systemImage: "play.fill")
+                                    .labelStyle(.iconOnly)
+                            }
+                        }
                             .buttonStyle(.bordered)
                             .buttonBorderShape(.circle)
                             .controlSize(.large)
                             .frame(minWidth: 44, minHeight: 44)
                             .disabled(!model.canRunCurrentProject)
+                            .accessibilityLabel(
+                                model.isSimulatorRunInProgress
+                                    ? "Running project"
+                                    : "Run project"
+                            )
                     }
                 } else {
                     Button(
@@ -52,7 +64,8 @@ struct AgentWorkspaceView: View {
                 }
             }
             .frame(width: 44, height: 44)
-            .padding(.trailing, 82)
+            .tint(.orange)
+            .padding(.trailing, 30)
             .padding(.bottom, 4)
             .offset(y: 10)
         }

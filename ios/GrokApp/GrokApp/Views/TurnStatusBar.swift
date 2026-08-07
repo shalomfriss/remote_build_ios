@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
+import Combine
 
 /// Upstream turn_status: braille + activity + phaseTimer … turnTimer ⇣Nk [stop].
 struct TurnStatusBar: View {

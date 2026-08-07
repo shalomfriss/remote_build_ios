@@ -20,7 +20,24 @@ def test_codex_command_uses_maintained_acp_adapter() -> None:
     assert command is not None
     assert command[0] == "/usr/bin/env"
     assert json.loads(command[1].removeprefix("CODEX_CONFIG=")) == {"model": "gpt-test"}
-    assert command[-3:] == ["/bin/npx", "--yes", "@agentclientprotocol/codex-acp"]
+    assert command[-3:] == [
+        "/bin/npx",
+        "--yes",
+        f"@agentclientprotocol/codex-acp@{BRIDGE.DEFAULT_CODEX_ACP_VERSION}",
+    ]
+
+
+def test_codex_adapter_version_can_be_overridden() -> None:
+    with (
+        patch.object(BRIDGE.shutil, "which", return_value="/bin/npx"),
+        patch.dict(BRIDGE.os.environ, {"CODEX_ACP_VERSION": "1.1.11"}),
+    ):
+        command = BRIDGE.find_agent("codex")
+    assert command == [
+        "/bin/npx",
+        "--yes",
+        "@agentclientprotocol/codex-acp@1.1.11",
+    ]
 
 
 def test_codex_command_falls_back_to_installed_binary() -> None:

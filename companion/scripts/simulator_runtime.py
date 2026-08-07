@@ -13,13 +13,18 @@ from pathlib import Path
 from typing import Any
 
 
-def select_device(data: dict[str, Any], preferred: str = "") -> dict[str, str] | None:
+def select_device(
+    data: dict[str, Any],
+    preferred: str = "",
+    excluded_udids: set[str] | None = None,
+) -> dict[str, str] | None:
+    excluded = excluded_udids or set()
     devices = [
         device
         for runtime, entries in data.get("devices", {}).items()
         if "SimRuntime.iOS-" in runtime
         for device in entries
-        if device.get("isAvailable", True)
+        if device.get("isAvailable", True) and device.get("udid") not in excluded
     ]
     if preferred:
         match = next(
@@ -47,11 +52,17 @@ def run(command: list[str], *, quiet: bool = False) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", required=True)
+    parser.add_argument("--project")
     parser.add_argument("--scheme", default="GrokApp")
     parser.add_argument("--bundle-id", default="app.grokbuild.ios")
-    parser.add_argument("--derived-data", required=True)
+    parser.add_argument("--derived-data")
     parser.add_argument("--device", default="")
+    parser.add_argument("--exclude-device", action="append", default=[])
+    parser.add_argument(
+        "--boot-only",
+        action="store_true",
+        help="Select and boot a simulator without building or installing Grok Build",
+    )
     args = parser.parse_args()
 
     listing = subprocess.run(
@@ -60,7 +71,11 @@ def main() -> int:
         capture_output=True,
         text=True,
     )
-    device = select_device(json.loads(listing.stdout), args.device)
+    device = select_device(
+        json.loads(listing.stdout),
+        args.device,
+        set(args.exclude_device),
+    )
     if device is None:
         print(f"No available iOS Simulator matched {args.device!r}", file=sys.stderr)
         return 1
@@ -68,6 +83,11 @@ def main() -> int:
     udid = device["udid"]
     subprocess.run(["xcrun", "simctl", "boot", udid], check=False, capture_output=True)
     run(["xcrun", "simctl", "bootstatus", udid, "-b"])
+    if args.boot_only:
+        print(json.dumps({"udid": udid, "name": device["name"]}))
+        return 0
+    if not args.project or not args.derived_data:
+        parser.error("--project and --derived-data are required unless --boot-only is used")
     run([
         "xcodebuild", "build",
         "-project", args.project,

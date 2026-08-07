@@ -57,6 +57,14 @@ def registered_projects(env: Mapping[str, str] = os.environ) -> list[dict[str, s
     return projects
 
 
+def latest_registered_project(
+    env: Mapping[str, str] = os.environ,
+) -> dict[str, str] | None:
+    """Return the project most recently added through Grok Build."""
+    projects = registered_projects(env)
+    return projects[-1] if projects else None
+
+
 def default_project_name(path: Path) -> str:
     metadata = path / ".grok-build-project.json"
     try:

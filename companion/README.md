@@ -8,12 +8,16 @@ Codex:
 ./companion/scripts/agent-phone
 ```
 
-`agent-phone` also boots an iOS Simulator, builds and launches Grok Build, and
-starts the pinned `serve-sim` preview. Its LAN URL is sent to the connected phone
-for the Simulator tab. The phone and Mac must be on the same trusted network;
+`agent-phone` boots one project simulator and launches the most recently added
+Grok Build project in it. It does not build or launch the Grok Build controller
+app. The pinned `serve-sim` preview follows the project simulator, and its LAN
+URL is sent to the connected phone for the Simulator tab. If no project exists
+yet, the simulator stays ready until the phone creates one.
+The phone and Mac must be on the same trusted network;
 set `GROK_SIMULATOR_ADVERTISE_HOST` if automatic LAN-address discovery chooses
 the wrong interface. Pass `--no-simulator` to run only the ACP bridge, or set
-`GROK_SIMULATOR_DEVICE` to a simulator name or UDID.
+`GROK_PROJECT_SIMULATOR_DEVICE` to choose the project simulator. The older
+`GROK_SIMULATOR_DEVICE` setting remains a fallback for compatibility.
 
 Each new phone project asks for a name and gets a fresh SwiftUI Xcode project
 under `~/.projects`. The name prefixes the project folder and becomes the
