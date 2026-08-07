@@ -129,10 +129,31 @@ def test_simulator_run_rpc_reports_unconfigured_pipeline() -> None:
 def test_discovers_generated_project_and_scheme(tmp_path: Path) -> None:
     project = tmp_path / "Example.xcodeproj"
     project.mkdir()
+    (project / "project.pbxproj").touch()
     container, flag = PIPELINE.find_xcode_container(tmp_path, {})
     assert container == project
     assert flag == "-project"
     assert PIPELINE.find_scheme(project, flag, {"GROK_IOS_SCHEME": "Example"}) == "Example"
+
+
+def test_stale_workspace_falls_back_to_latest_runnable_registered_project(
+    tmp_path: Path,
+) -> None:
+    from project_registry import register_project
+
+    projects_root = tmp_path / "projects"
+    stale = tmp_path / "temporary-session"
+    stale.mkdir()
+    (stale / "Broken.xcodeproj").mkdir()
+
+    runnable = projects_root / "fitness-app"
+    xcode_project = runnable / "FitnessApp.xcodeproj"
+    xcode_project.mkdir(parents=True)
+    (xcode_project / "project.pbxproj").touch()
+    env = {"GROK_PROJECTS_ROOT": str(projects_root)}
+    register_project(runnable, "Fitness App", env)
+
+    assert PIPELINE.resolve_build_workspace(stale, env) == runnable.resolve()
 
 
 def test_new_session_creates_and_selects_project(tmp_path: Path) -> None:

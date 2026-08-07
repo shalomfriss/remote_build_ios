@@ -37,7 +37,10 @@ function proxyHTTP(request, response) {
   }
 
   const target = simulatorURL(request.url);
-  const headers = { ...request.headers, host: target.host };
+  // Keep the phone-visible Host header so serve-sim advertises helper URLs on
+  // this gateway (or its ngrok hostname), rather than unreachable 127.0.0.1.
+  // http.request still connects to `target`; Host only controls generated URLs.
+  const headers = { ...request.headers };
   delete headers.connection;
   delete headers.upgrade;
   const upstream = http.request(target, { method: request.method, headers }, (upstreamResponse) => {

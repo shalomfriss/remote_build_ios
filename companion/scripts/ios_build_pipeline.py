@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from project_registry import latest_registered_project
+from project_registry import latest_registered_project, registered_projects
 
 
 IOS_POLICY_MARKER = "[grok-build-ios-target]"
@@ -89,35 +89,70 @@ def _ignored(path: Path) -> bool:
     return any(part in ignored or part.endswith(".xcodeproj") for part in path.parts[:-1])
 
 
+def _is_valid_xcode_container(path: Path) -> bool:
+    if path.suffix == ".xcodeproj":
+        return (path / "project.pbxproj").is_file()
+    if path.suffix == ".xcworkspace":
+        return (path / "contents.xcworkspacedata").is_file()
+    return False
+
+
 def find_xcode_container(workspace: Path, env: Mapping[str, str] = os.environ) -> tuple[Path, str]:
     explicit_workspace = env.get("GROK_IOS_WORKSPACE", "").strip()
     explicit_project = env.get("GROK_IOS_PROJECT", "").strip()
     if explicit_workspace:
         path = Path(explicit_workspace).expanduser()
         path = path if path.is_absolute() else workspace / path
-        if not path.is_dir():
+        if not _is_valid_xcode_container(path):
             raise RuntimeError(f"Configured Xcode workspace does not exist: {path}")
         return path.resolve(), "-workspace"
     if explicit_project:
         path = Path(explicit_project).expanduser()
         path = path if path.is_absolute() else workspace / path
-        if not path.is_dir():
+        if not _is_valid_xcode_container(path):
             raise RuntimeError(f"Configured Xcode project does not exist: {path}")
         return path.resolve(), "-project"
 
     workspaces = sorted(
-        (path for path in workspace.rglob("*.xcworkspace") if not _ignored(path)),
+        (
+            path for path in workspace.rglob("*.xcworkspace")
+            if not _ignored(path) and _is_valid_xcode_container(path)
+        ),
         key=lambda path: (len(path.relative_to(workspace).parts), str(path)),
     )
     if workspaces:
         return workspaces[0], "-workspace"
     projects = sorted(
-        (path for path in workspace.rglob("*.xcodeproj") if not _ignored(path)),
+        (
+            path for path in workspace.rglob("*.xcodeproj")
+            if not _ignored(path) and _is_valid_xcode_container(path)
+        ),
         key=lambda path: (len(path.relative_to(workspace).parts), str(path)),
     )
     if projects:
         return projects[0], "-project"
     raise RuntimeError("No iOS Xcode workspace or project was found in the agent workspace")
+
+
+def resolve_build_workspace(
+    workspace: Path,
+    env: Mapping[str, str] = os.environ,
+) -> Path:
+    """Recover from an ACP session whose temporary workspace became stale."""
+    requested = workspace.expanduser().resolve()
+    try:
+        find_xcode_container(requested, env)
+        return requested
+    except RuntimeError as requested_error:
+        for project in reversed(registered_projects(env)):
+            candidate = Path(project["path"]).expanduser().resolve()
+            try:
+                find_xcode_container(candidate, env)
+            except RuntimeError:
+                continue
+            log(f"workspace {requested} is not runnable; using registered project {candidate}")
+            return candidate
+        raise requested_error
 
 
 def find_scheme(
@@ -202,6 +237,7 @@ def build_and_launch(
     derived_data: Path,
     env: Mapping[str, str] = os.environ,
 ) -> dict[str, str]:
+    workspace = resolve_build_workspace(workspace, env)
     target = discover_build_target(workspace, env)
     derived_data.mkdir(parents=True, exist_ok=True)
     command = [
