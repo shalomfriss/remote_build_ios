@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
-import UIKit
+import WebKit
 
 struct RemoteSimulatorView: View {
     @EnvironmentObject private var model: AppModel
@@ -23,8 +23,7 @@ struct RemoteSimulatorView: View {
                     }
                 } else if let url = model.simulatorURL {
                     SimulatorWebView(
-                        url: previewURL(for: url),
-                        fillsViewport: isFullScreen,
+                        url: url,
                         error: $webError
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -56,22 +55,8 @@ struct RemoteSimulatorView: View {
             }
 
             if isFullScreen {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: onToggleFullScreen)
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.bordered)
-                            .tint(.orange)
-                            .buttonBorderShape(.circle)
-                            .controlSize(.large)
-                            .frame(minWidth: 44, minHeight: 44)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, 30)
-                .padding(.bottom, 32)
+                DraggableFullScreenExitButton(action: onToggleFullScreen)
+                    .zIndex(2)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -88,165 +73,171 @@ struct RemoteSimulatorView: View {
         webError = nil
         Task { await model.refreshSimulatorURL() }
     }
+}
 
-    private func previewURL(for url: URL) -> URL {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url
+private struct DraggableFullScreenExitButton: View {
+    private static let buttonSize: CGFloat = 52
+    private static let edgeInset: CGFloat = 12
+
+    let action: () -> Void
+
+    @State private var position: CGPoint?
+    @State private var dragOrigin: CGPoint?
+
+    var body: some View {
+        GeometryReader { geometry in
+            Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: action)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .tint(.orange)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .frame(width: Self.buttonSize, height: Self.buttonSize)
+                .contentShape(.circle)
+                .position(resolvedPosition(in: geometry))
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 5, coordinateSpace: .named("simulator-full-screen"))
+                        .onChanged { value in
+                            let origin = dragOrigin ?? resolvedPosition(in: geometry)
+                            dragOrigin = origin
+                            position = clamped(
+                                CGPoint(
+                                    x: origin.x + value.translation.width,
+                                    y: origin.y + value.translation.height
+                                ),
+                                in: geometry
+                            )
+                        }
+                        .onEnded { value in
+                            let origin = dragOrigin ?? resolvedPosition(in: geometry)
+                            position = clamped(
+                                CGPoint(
+                                    x: origin.x + value.translation.width,
+                                    y: origin.y + value.translation.height
+                                ),
+                                in: geometry
+                            )
+                            dragOrigin = nil
+                        }
+                )
+                .accessibilityHint("Drag to move this button. Tap to leave full screen.")
         }
-        var queryItems = components.queryItems ?? []
-        if !queryItems.contains(where: { $0.name == "codec" }) {
-            queryItems.append(URLQueryItem(name: "codec", value: "mjpeg"))
-            components.queryItems = queryItems
+        .coordinateSpace(name: "simulator-full-screen")
+    }
+
+    private func resolvedPosition(in geometry: GeometryProxy) -> CGPoint {
+        if let position {
+            return clamped(position, in: geometry)
         }
-        return components.url ?? url
+
+        let radius = Self.buttonSize / 2
+        return clamped(
+            CGPoint(
+                x: geometry.size.width - Self.edgeInset - radius,
+                y: geometry.safeAreaInsets.top + Self.edgeInset + radius
+            ),
+            in: geometry
+        )
+    }
+
+    private func clamped(_ point: CGPoint, in geometry: GeometryProxy) -> CGPoint {
+        let radius = Self.buttonSize / 2
+        let minimumX = Self.edgeInset + radius
+        let maximumX = max(minimumX, geometry.size.width - Self.edgeInset - radius)
+        let minimumY = geometry.safeAreaInsets.top + Self.edgeInset + radius
+        let maximumY = max(
+            minimumY,
+            geometry.size.height - geometry.safeAreaInsets.bottom - Self.edgeInset - radius
+        )
+        return CGPoint(
+            x: min(max(point.x, minimumX), maximumX),
+            y: min(max(point.y, minimumY), maximumY)
+        )
     }
 }
 
 private struct SimulatorWebView: UIViewRepresentable {
     let url: URL
-    let fillsViewport: Bool
     @Binding var error: String?
 
-    func makeUIView(context: Context) -> SimulatorImageView {
-        let imageView = SimulatorImageView()
-        imageView.backgroundColor = .clear
-        imageView.contentMode = .scaleAspectFit
-        imageView.clipsToBounds = true
-        context.coordinator.imageView = imageView
-        return imageView
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: """
+                localStorage.removeItem('serve-sim:simulator-frame-scale');
+                const style = document.createElement('style');
+                style.textContent = `
+                    a[href*="github.com/EvanBacon/serve-sim"],
+                    a[aria-label="Open serve-sim"],
+                    button[aria-label="Open WebKit DevTools"] {
+                        display: none !important;
+                    }
+                `;
+                document.documentElement.appendChild(style);
+                """,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.bounces = false
+        return webView
     }
 
-    func updateUIView(_ imageView: SimulatorImageView, context: Context) {
-        imageView.contentMode = .scaleAspectFit
-        context.coordinator.start(baseURL: url)
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        guard webView.url != url else { return }
+        webView.load(URLRequest(url: url))
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(error: $error)
     }
 
-    static func dismantleUIView(_ uiView: SimulatorImageView, coordinator: Coordinator) {
-        coordinator.stop()
-    }
-
-    final class Coordinator: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         private let error: Binding<String?>
-        private var discoveryTask: URLSessionDataTask?
-        private var streamTask: URLSessionDataTask?
-        private var streamSession: URLSession?
-        private var buffer = Data()
-        private var currentBaseURL: URL?
-        weak var imageView: UIImageView?
 
         init(error: Binding<String?>) {
             self.error = error
         }
 
-        func start(baseURL: URL) {
-            guard currentBaseURL != baseURL else { return }
-            stop()
-            currentBaseURL = baseURL
-
-            guard let apiURL = endpointURL(path: "/api", relativeTo: baseURL) else {
-                report("The simulator endpoint is invalid.")
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+        ) {
+            if let response = navigationResponse.response as? HTTPURLResponse,
+               response.statusCode >= 400 {
+                error.wrappedValue = "The simulator endpoint returned HTTP \(response.statusCode). Restart agent-phone or check the tunnel."
+                decisionHandler(.cancel)
                 return
             }
-
-            discoveryTask = URLSession.shared.dataTask(with: apiURL) { [weak self] data, response, requestError in
-                guard let self, self.currentBaseURL == baseURL else { return }
-                if let requestError {
-                    self.report(requestError.localizedDescription)
-                    return
-                }
-                guard let http = response as? HTTPURLResponse, http.statusCode < 400,
-                      let data,
-                      let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let advertisedStream = payload["streamUrl"] as? String,
-                      let streamURL = URL(string: advertisedStream),
-                      let reachableStreamURL = self.endpointURL(
-                        path: streamURL.path,
-                        relativeTo: baseURL
-                      ) else {
-                    self.report("The simulator did not provide a usable video stream.")
-                    return
-                }
-                self.openStream(reachableStreamURL)
-            }
-            discoveryTask?.resume()
+            error.wrappedValue = nil
+            decisionHandler(.allow)
         }
 
-        func stop() {
-            discoveryTask?.cancel()
-            streamTask?.cancel()
-            streamSession?.invalidateAndCancel()
-            discoveryTask = nil
-            streamTask = nil
-            streamSession = nil
-            buffer.removeAll(keepingCapacity: false)
-            currentBaseURL = nil
-        }
-
-        private func openStream(_ streamURL: URL) {
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.timeoutIntervalForRequest = 30
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 1
-            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
-            streamSession = session
-            streamTask = session.dataTask(with: streamURL)
-            streamTask?.resume()
-        }
-
-        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-            buffer.append(data)
-            let startMarker = Data([0xFF, 0xD8])
-            let endMarker = Data([0xFF, 0xD9])
-
-            while let start = buffer.range(of: startMarker),
-                  let end = buffer.range(of: endMarker, in: start.lowerBound..<buffer.endIndex) {
-                let frame = buffer.subdata(in: start.lowerBound..<end.upperBound)
-                buffer.removeSubrange(buffer.startIndex..<end.upperBound)
-                guard let image = UIImage(data: frame) else { continue }
-                DispatchQueue.main.async { [weak self] in
-                    self?.error.wrappedValue = nil
-                    self?.imageView?.image = image
-                }
-            }
-
-            if buffer.count > 12_000_000 {
-                buffer.removeAll(keepingCapacity: true)
-            }
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            task: URLSessionTask,
-            didCompleteWithError completionError: Error?
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation?,
+            withError navigationError: Error
         ) {
-            if let completionError = completionError as? URLError,
-               completionError.code != .cancelled {
-                report(completionError.localizedDescription)
-            }
+            error.wrappedValue = navigationError.localizedDescription
         }
 
-        private func endpointURL(path: String, relativeTo baseURL: URL) -> URL? {
-            guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-                return nil
-            }
-            components.path = path
-            components.query = nil
-            components.fragment = nil
-            return components.url
-        }
-
-        private func report(_ message: String) {
-            DispatchQueue.main.async { [weak self] in
-                self?.error.wrappedValue = message
-            }
+        func webView(
+            _ webView: WKWebView,
+            didFail navigation: WKNavigation?,
+            withError navigationError: Error
+        ) {
+            error.wrappedValue = navigationError.localizedDescription
         }
     }
-}
-
-private final class SimulatorImageView: UIImageView {
-    override var intrinsicContentSize: CGSize { .zero }
 }
