@@ -8,6 +8,7 @@ struct RemoteSimulatorView: View {
     @EnvironmentObject private var model: AppModel
     @State private var webError: String?
     let isFullScreen: Bool
+    let reloadID: UUID
     let onToggleFullScreen: () -> Void
 
     var body: some View {
@@ -24,6 +25,8 @@ struct RemoteSimulatorView: View {
                 } else if let url = model.simulatorURL {
                     SimulatorWebView(
                         url: url,
+                        fillsViewport: isFullScreen,
+                        reloadID: reloadID,
                         error: $webError
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -134,7 +137,7 @@ private struct DraggableFullScreenExitButton: View {
         return clamped(
             CGPoint(
                 x: geometry.size.width - Self.edgeInset - radius,
-                y: geometry.safeAreaInsets.top + Self.edgeInset + radius
+                y: geometry.size.height - geometry.safeAreaInsets.bottom - Self.edgeInset - radius
             ),
             in: geometry
         )
@@ -158,16 +161,62 @@ private struct DraggableFullScreenExitButton: View {
 
 private struct SimulatorWebView: UIViewRepresentable {
     let url: URL
+    let fillsViewport: Bool
+    let reloadID: UUID
     @Binding var error: String?
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.websiteDataStore = .nonPersistent()
+        let simulatorScaleScript = fillsViewport
+            ? "localStorage.setItem('serve-sim:simulator-frame-scale', '3');"
+            : "localStorage.removeItem('serve-sim:simulator-frame-scale');"
+        let fullScreenPresentationScript = fillsViewport ? """
+            const fitSimulatorToViewport = () => {
+                const status = document.querySelector('[aria-label="Simulator status"]');
+                const shell = status?.parentElement;
+                const viewport = shell?.parentElement;
+                const surface = shell?.querySelector('.relative.max-h-full');
+                const stream = surface?.firstElementChild;
+                const floatingControls = document.querySelector('[aria-label="Open tools panel"]')?.parentElement;
+
+                viewport?.setAttribute('data-build-buddy-simulator-viewport', '');
+                shell?.setAttribute('data-build-buddy-simulator-shell', '');
+                surface?.setAttribute('data-build-buddy-simulator-surface', '');
+                stream?.setAttribute('data-build-buddy-simulator-stream', '');
+                floatingControls?.setAttribute('data-build-buddy-simulator-controls', '');
+            };
+
+            const simulatorObserver = new MutationObserver(fitSimulatorToViewport);
+            simulatorObserver.observe(document.documentElement, { childList: true, subtree: true });
+            document.addEventListener('DOMContentLoaded', fitSimulatorToViewport);
+            fitSimulatorToViewport();
+            """ : ""
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: """
-                localStorage.removeItem('serve-sim:simulator-frame-scale');
+                \(simulatorScaleScript)
+                const codecFallbackKey = 'build-buddy:codec-fallback-at';
+                const codecFallbackAt = Number(sessionStorage.getItem(codecFallbackKey) || 0);
+                const useCodecFallback = codecFallbackAt > 0 && Date.now() - codecFallbackAt < 60000;
+                if (useCodecFallback) {
+                    localStorage.setItem('serve-sim:codec', 'mjpeg');
+                } else {
+                    sessionStorage.removeItem(codecFallbackKey);
+                    localStorage.removeItem('serve-sim:codec');
+                }
+                window.setTimeout(() => {
+                    if (useCodecFallback) return;
+                    const isStillConnecting = Array.from(document.querySelectorAll('span'))
+                        .some((element) => element.textContent?.trim() === 'Connecting...');
+                    if (isStillConnecting) {
+                        sessionStorage.setItem(codecFallbackKey, String(Date.now()));
+                        localStorage.setItem('serve-sim:codec', 'mjpeg');
+                        window.location.reload();
+                    }
+                }, 10000);
+                \(fullScreenPresentationScript)
                 const style = document.createElement('style');
                 style.textContent = `
                     a[href*="github.com/EvanBacon/serve-sim"],
@@ -175,6 +224,53 @@ private struct SimulatorWebView: UIViewRepresentable {
                     button[aria-label="Open WebKit DevTools"] {
                         display: none !important;
                     }
+
+                    \(fillsViewport ? """
+                    html, body, #root, #root > div,
+                    [data-build-buddy-simulator-viewport],
+                    [data-build-buddy-simulator-shell],
+                    [data-build-buddy-simulator-surface],
+                    [data-build-buddy-simulator-stream] {
+                        width: 100% !important;
+                        height: 100% !important;
+                        max-width: none !important;
+                        max-height: none !important;
+                        box-sizing: border-box !important;
+                    }
+
+                    html, body, #root, #root > div,
+                    [data-build-buddy-simulator-viewport] {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        gap: 0 !important;
+                        overflow: hidden !important;
+                    }
+
+                    [aria-label="Simulator status"],
+                    [aria-label="Simulator actions"],
+                    [aria-label="Accessibility overlay"],
+                    [data-build-buddy-simulator-controls] {
+                        display: none !important;
+                    }
+
+                    [data-build-buddy-simulator-shell] {
+                        gap: 0 !important;
+                    }
+
+                    [data-build-buddy-simulator-surface] {
+                        aspect-ratio: auto !important;
+                    }
+
+                    [data-build-buddy-simulator-surface] > :not([data-build-buddy-simulator-stream]) {
+                        display: none !important;
+                        pointer-events: none !important;
+                    }
+
+                    [data-build-buddy-simulator-stream] {
+                        border-radius: 0 !important;
+                        pointer-events: auto !important;
+                    }
+                    """ : "")
                 `;
                 document.documentElement.appendChild(style);
                 """,
@@ -194,19 +290,28 @@ private struct SimulatorWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard webView.url != url else { return }
-        webView.load(URLRequest(url: url))
+        let reloadRequested = context.coordinator.consumeReloadRequest(reloadID)
+        guard reloadRequested || webView.url != url else { return }
+        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(error: $error)
+        Coordinator(error: $error, reloadID: reloadID)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let error: Binding<String?>
+        private var reloadID: UUID
 
-        init(error: Binding<String?>) {
+        init(error: Binding<String?>, reloadID: UUID) {
             self.error = error
+            self.reloadID = reloadID
+        }
+
+        func consumeReloadRequest(_ reloadID: UUID) -> Bool {
+            guard self.reloadID != reloadID else { return false }
+            self.reloadID = reloadID
+            return true
         }
 
         func webView(
@@ -238,6 +343,10 @@ private struct SimulatorWebView: UIViewRepresentable {
             withError navigationError: Error
         ) {
             error.wrappedValue = navigationError.localizedDescription
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            webView.reload()
         }
     }
 }

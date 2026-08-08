@@ -128,24 +128,45 @@ if LAN_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" \
 else
   SERVE_SIM_HOST="127.0.0.1"
 fi
-npx --yes "serve-sim@${SERVE_SIM_VERSION}" "$PROJECT_SIM_UDID" \
-  --port "$SIMULATOR_PORT" --host "$SERVE_SIM_HOST" --fit --panes none >"$SERVE_SIM_LOG" 2>&1 &
-SERVE_SIM_PID=$!
+serve_sim_streams_project_device() {
+  curl --silent --fail --max-time 2 "http://127.0.0.1:${SIMULATOR_PORT}/grid/api" |
+    python3 -c 'import json,sys; udid=sys.argv[1]; payload=json.load(sys.stdin); raise SystemExit(0 if any(device.get("device") == udid and device.get("helper") for device in payload.get("devices", [])) else 1)' \
+      "$PROJECT_SIM_UDID"
+}
 
-for _ in {1..240}; do
-  if curl --silent --fail --output /dev/null "http://127.0.0.1:${SIMULATOR_PORT}/api"; then
-    break
-  fi
-  if ! kill -0 "$SERVE_SIM_PID" 2>/dev/null; then
-    echo "agent-phone: serve-sim stopped before becoming ready" >&2
-    tail -n 20 "$SERVE_SIM_LOG" >&2
-    exit 1
-  fi
-  sleep 0.5
-done
-if ! curl --silent --fail --output /dev/null "http://127.0.0.1:${SIMULATOR_PORT}/api"; then
-  echo "agent-phone: timed out waiting for serve-sim" >&2
+start_serve_sim() {
+  npx --yes "serve-sim@${SERVE_SIM_VERSION}" "$PROJECT_SIM_UDID" \
+    --port "$SIMULATOR_PORT" --host "$SERVE_SIM_HOST" --fit --panes none >"$SERVE_SIM_LOG" 2>&1 &
+  SERVE_SIM_PID=$!
+
+  for _ in {1..240}; do
+    if serve_sim_streams_project_device; then
+      return 0
+    fi
+    if ! kill -0 "$SERVE_SIM_PID" 2>/dev/null; then
+      echo "agent-phone: serve-sim stopped before streaming the project simulator" >&2
+      tail -n 20 "$SERVE_SIM_LOG" >&2
+      return 1
+    fi
+    sleep 0.5
+  done
+  echo "agent-phone: timed out waiting for the project simulator stream" >&2
   tail -n 20 "$SERVE_SIM_LOG" >&2
+  return 1
+}
+
+restart_serve_sim() {
+  if [[ -n "$SERVE_SIM_PID" ]] && kill -0 "$SERVE_SIM_PID" 2>/dev/null; then
+    kill "$SERVE_SIM_PID" 2>/dev/null || true
+    wait "$SERVE_SIM_PID" 2>/dev/null || true
+  fi
+  npx --yes "serve-sim@${SERVE_SIM_VERSION}" --kill "$PROJECT_SIM_UDID" >/dev/null 2>&1 || true
+  python3 "$ROOT/companion/scripts/simulator_runtime.py" \
+    --boot-only --device "$PROJECT_SIM_UDID" >/dev/null
+  start_serve_sim
+}
+
+if ! start_serve_sim; then
   exit 1
 fi
 
@@ -267,4 +288,21 @@ if [[ "$BRIDGE_READY" -ne 1 ]]; then
 fi
 
 echo "agent-phone: latest project preview and the agent are ready"
+STREAM_FAILURES=0
+while kill -0 "$BRIDGE_PID" 2>/dev/null; do
+  if [[ -n "$SERVE_SIM_PID" ]] && kill -0 "$SERVE_SIM_PID" 2>/dev/null \
+    && serve_sim_streams_project_device; then
+    STREAM_FAILURES=0
+  else
+    STREAM_FAILURES=$((STREAM_FAILURES + 1))
+    if [[ "$STREAM_FAILURES" -ge 5 ]]; then
+      echo "agent-phone: project simulator stream stopped; recovering ${PROJECT_SIM_NAME}" >&2
+      if ! restart_serve_sim; then
+        echo "agent-phone: project simulator stream recovery failed; retrying" >&2
+      fi
+      STREAM_FAILURES=0
+    fi
+  fi
+  sleep 2
+done
 wait "$BRIDGE_PID"

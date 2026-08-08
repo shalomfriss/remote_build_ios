@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Build Buddy Companion</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="brand"><span class="brand-mark">⠿</span><div><h1>Build Buddy</h1><p>Companion control center</p></div></div>
+        <div id="status" class="status stopped"><span></span>Stopped</div>
+      </header>
+
+      <section class="hero panel">
+        <div><div class="eyebrow">iPhone development bridge</div><h2 id="headline">Ready to start</h2><p id="summary">Start the companion to boot and stream your project simulator.</p></div>
+        <div class="actions"><button id="stop" class="secondary" disabled>Stop</button><button id="start">Start Companion</button></div>
+      </section>
+
+      <section id="connection" class="connection-grid">
+        <article class="panel metric"><label>Pairing PIN</label><strong id="pin">— — — — — —</strong><button class="text-button" data-copy="pin">Copy</button></article>
+        <article class="panel metric"><label>Remote endpoint</label><strong id="remote">Not connected</strong><button class="text-button" data-copy="remote">Copy</button></article>
+        <article class="panel metric"><label>Simulator</label><strong id="simulator">Not running</strong><button id="open-simulator" class="text-button" disabled>Open stream</button></article>
+      </section>
+
+      <section class="content-grid">
+        <form id="settings" class="panel">
+          <div class="section-title"><div><h3>Configuration</h3><p>Saved automatically on start.</p></div></div>
+          <label>Workspace<div class="field-row"><input id="workspace" required><button type="button" class="browse" data-field="workspace">Choose</button></div></label>
+          <label>Projects folder<div class="field-row"><input id="projectsRoot" required><button type="button" class="browse" data-field="projectsRoot">Choose</button></div></label>
+          <div class="two-up"><label>Agent<select id="agent"><option value="codex">Codex</option><option value="claude">Claude</option><option value="local">Local</option></select></label><label>Model<input id="model" placeholder="Optional"></label></div>
+          <label>Simulator device<input id="simulatorDevice" placeholder="Automatic, or name / UDID"></label>
+          <div class="three-up"><label>ACP port<input id="acpPort" inputmode="numeric"></label><label>Stream port<input id="simulatorPort" inputmode="numeric"></label><label>Gateway port<input id="gatewayPort" inputmode="numeric"></label></div>
+          <label>Reserved ngrok URL<input id="ngrokUrl" placeholder="Optional"></label>
+          <div class="toggles"><label class="toggle"><input id="ngrok" type="checkbox"><span></span>Allow cellular access with ngrok</label><label class="toggle"><input id="startSimulator" type="checkbox"><span></span>Boot and stream the project simulator</label></div>
+        </form>
+
+        <section class="panel logs-panel">
+          <div class="section-title"><div><h3>Live output</h3><p id="log-count">No messages yet</p></div><button id="clear" class="text-button">Clear</button></div>
+          <div id="logs" class="logs"><div class="empty">Companion output will appear here.</div></div>
+        </section>
+      </section>
+    </main>
+    <div id="toast"></div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

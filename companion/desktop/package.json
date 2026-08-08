@@ -1,0 +1,54 @@
+{
+  "name": "build-buddy-companion",
+  "version": "0.1.0",
+  "description": "Desktop controller for the Build Buddy iOS companion",
+  "main": "src/main.cjs",
+  "author": "Pedro Shakour",
+  "license": "Apache-2.0",
+  "scripts": {
+    "postinstall": "install-electron",
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.buildbuddy.companion",
+    "productName": "Build Buddy Companion",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../scripts",
+        "to": "runtime/companion/scripts"
+      },
+      {
+        "from": "../../upstream-grok-build",
+        "to": "runtime/upstream-grok-build",
+        "filter": [
+          "**/*",
+          "!.git/**/*",
+          "!target/**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null
+    },
+    "dmg": {
+      "title": "Build Buddy Companion"
+    }
+  }
+}

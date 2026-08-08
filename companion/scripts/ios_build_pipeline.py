@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from project_registry import latest_registered_project, registered_projects
+from simulator_runtime import ensure_device_booted, list_available_devices
 
 
 IOS_POLICY_MARKER = "[grok-build-ios-target]"
@@ -231,12 +232,31 @@ def _bundle_id(app: Path) -> str:
     return value
 
 
+def simulator_state(udid: str) -> str:
+    runtimes = list_available_devices().get("devices", {})
+    for devices in runtimes.values():
+        for device in devices:
+            if device.get("udid") == udid:
+                return str(device.get("state", "Shutdown"))
+    raise RuntimeError(f"The configured iOS Simulator does not exist: {udid}")
+
+
+def ensure_simulator_booted(udid: str) -> None:
+    """Boot the build simulator when necessary and wait until it is usable."""
+    if not udid.strip():
+        raise RuntimeError("No project simulator is configured.")
+    state = simulator_state(udid)
+    log(f"ensuring simulator {udid} is ready (state={state})")
+    ensure_device_booted(udid, state=state)
+
+
 def build_and_launch(
     workspace: Path,
     udid: str,
     derived_data: Path,
     env: Mapping[str, str] = os.environ,
 ) -> dict[str, str]:
+    ensure_simulator_booted(udid)
     workspace = resolve_build_workspace(workspace, env)
     target = discover_build_target(workspace, env)
     derived_data.mkdir(parents=True, exist_ok=True)

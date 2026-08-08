@@ -32,6 +32,7 @@ final class ACPClient: ObservableObject {
     private var rpcTimeoutTasks: [Int: Task<Void, Never>] = [:]
     private var handshakeTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
+    private var webSocketKeepAliveTask: Task<Void, Never>?
     private var lineWaiter: CheckedContinuation<String, Error>?
     private var lineTimeoutTask: Task<Void, Never>?
     /// TOFU: leaf fingerprint observed during TLS (persisted only after PIN succeeds).
@@ -153,7 +154,30 @@ final class ACPClient: ObservableObject {
                 return
             }
             guard self.webSocketTask === task else { return }
+            self.startWebSocketKeepAlive(task)
             await self.runConnectPipeline()
+        }
+    }
+
+    private func startWebSocketKeepAlive(_ task: URLSessionWebSocketTask) {
+        webSocketKeepAliveTask?.cancel()
+        webSocketKeepAliveTask = Task { @MainActor [weak self, weak task] in
+            guard let self, let task else { return }
+            while !Task.isCancelled, self.webSocketTask === task {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, self.webSocketTask === task else { return }
+                do {
+                    try await self.waitUntilWebSocketOpen(task)
+                } catch {
+                    guard self.webSocketTask === task else { return }
+                    if self.sessionReady {
+                        self.handleTransportDrop()
+                    } else {
+                        self.fail("Could not reach companion: \(error.localizedDescription)")
+                    }
+                    return
+                }
+            }
         }
     }
 
@@ -188,6 +212,8 @@ final class ACPClient: ObservableObject {
         handshakeTask = nil
         connectTimeoutTask?.cancel()
         connectTimeoutTask = nil
+        webSocketKeepAliveTask?.cancel()
+        webSocketKeepAliveTask = nil
         for (_, cont) in pendingRequests {
             cont.resume(throwing: ACPClientError.cancelled)
         }

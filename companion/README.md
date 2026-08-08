@@ -13,6 +13,16 @@ Grok Build project in it. It does not build or launch the Grok Build controller
 app. The pinned `serve-sim` preview follows the project simulator, and its LAN
 URL is sent to the connected phone for the Simulator tab. If no project exists
 yet, the simulator stays ready until the phone creates one.
+Every Run request rechecks and boots that same simulator before building. While
+the companion is running, it also restarts the pinned `serve-sim` helper if the
+project simulator stream stops.
+Simulator startup validates SpringBoard readiness rather than trusting the
+CoreSimulator `Booted` flag alone. A device stuck waiting for BackBoard is
+shut down and retried once; automatic selection then falls back to another
+available iPhone without erasing simulator data. Set
+`GROK_SIMULATOR_BOOT_TIMEOUT` to change the default 60-second boot timeout.
+If CoreSimulator itself hangs while listing devices, the launcher restarts the
+per-user CoreSimulator service once and retries without erasing device data.
 The phone and Mac must be on the same trusted network;
 set `GROK_SIMULATOR_ADVERTISE_HOST` if automatic LAN-address discovery chooses
 the wrong interface. Pass `--no-simulator` to run only the ACP bridge, or set

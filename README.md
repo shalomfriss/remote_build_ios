@@ -36,6 +36,17 @@ git submodule update --init --recursive
 
 ### 1. Start an agent on your Mac
 
+Desktop app (start/stop controls, settings, PIN, endpoints, and live logs):
+
+```bash
+cd companion/desktop
+npm install
+npm start
+```
+
+See [companion/desktop/README.md](companion/desktop/README.md) to build the
+standalone macOS app.
+
 Codex (default; uses your existing Codex/ChatGPT login or OpenAI key):
 
 ```bash

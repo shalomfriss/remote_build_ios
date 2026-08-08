@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     private var browserBagForward: AnyCancellable?
     private var isReconnecting = false
     private var resumeTask: Task<Void, Never>?
+    private var activeResumeAttempt: UUID?
 
     var theme: GrokTheme { GrokTheme.load(named: themeName) }
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
@@ -421,6 +422,9 @@ final class AppModel: ObservableObject {
         guard screen == .agent || screen == .dashboard else { return }
         simulatorURL = nil
         reconnectBanner = "Disconnected — reconnecting…"
+        // Resume owns its reconnect target and retry budget. Starting the generic
+        // reconnect loop here would race it and can cancel the selected project load.
+        guard activeResumeAttempt == nil else { return }
         reconnectTransportIfNeeded()
     }
 
@@ -469,6 +473,8 @@ final class AppModel: ObservableObject {
     func resumeSession(id: String, cwd: String? = nil) {
         guard canStartSession else { showOnboarding(); return }
         resumeTask?.cancel()
+        let attemptID = UUID()
+        activeResumeAttempt = attemptID
         screen = .agent
         acp.tracker.reset()
         if let preferredBonjourEndpoint {
@@ -479,6 +485,11 @@ final class AppModel: ObservableObject {
         reconnectBanner = "Resuming session…"
         resumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.activeResumeAttempt == attemptID {
+                    self.activeResumeAttempt = nil
+                }
+            }
 
             // The session picker is populated over an already initialized ACP
             // connection. Reuse it so Resume does not kill the working bridge and
@@ -493,42 +504,61 @@ final class AppModel: ObservableObject {
                     guard !Task.isCancelled else { return }
                     self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
+                    return
                 } catch {
                     guard !Task.isCancelled else { return }
-                    let message = error.localizedDescription
-                    self.reconnectBanner = "Resume failed: \(message)"
-                    self.acp.tracker.appendError(message)
+                    // The socket can disappear between listing and loading a
+                    // project. Recover below instead of surfacing the first write.
+                    self.reconnectBanner = "Connection interrupted — retrying…"
                 }
-                return
             }
 
-            // If the transport genuinely went away while the picker was open,
-            // reconnect and ask the new ACP connection to load the selected session.
-            self.acp.reconnect(
+            await self.reconnectAndResumeSession(id: id, cwd: cwd)
+        }
+    }
+
+    private func reconnectAndResumeSession(id: String, cwd: String?) async {
+        var switchedToRemoteEndpoint = preferredBonjourEndpoint == nil
+
+        for attempt in 1...3 {
+            guard !Task.isCancelled else { return }
+            if attempt > 1 {
+                reconnectBanner = "Retrying connection (\(attempt)/3)…"
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
+            }
+
+            acp.reconnect(
                 preserveSessionId: id,
                 cwd: cwd,
                 showLatestMessage: true
             )
-            let deadline = Date.now.addingTimeInterval(30)
+            let deadline = Date.now.addingTimeInterval(25)
             while Date.now < deadline {
-                if Task.isCancelled { return }
-                if self.acp.sessionReady,
-                   self.acp.sessionId == id || id.hasPrefix("grok-project:") {
-                    self.simulatorURL = await self.acp.fetchSimulatorURL()
-                    self.reconnectBanner = nil
+                guard !Task.isCancelled else { return }
+                if acp.sessionReady,
+                   acp.sessionId == id || id.hasPrefix("grok-project:") {
+                    simulatorURL = await acp.fetchSimulatorURL()
+                    reconnectBanner = nil
                     return
                 }
-                if let error = self.acp.lastError, !error.isEmpty {
-                    self.reconnectBanner = "Resume failed: \(error)"
-                    self.acp.tracker.appendError(error)
-                    return
+                if acp.lastError?.isEmpty == false {
+                    break
                 }
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            let message = "Resume timed out"
-            self.reconnectBanner = message
-            self.acp.tracker.appendError(message)
+
+            if !switchedToRemoteEndpoint,
+               preferredBonjourEndpoint != nil,
+               CompanionConfig.hasRemoteEndpoint {
+                switchedToRemoteEndpoint = true
+                clearBonjourPreference()
+                reconnectBanner = "Switching to remote connection…"
+            }
         }
+
+        let message = acp.lastError ?? "Could not reconnect to companion"
+        reconnectBanner = "Resume failed: \(message)"
+        acp.tracker.appendError(message)
     }
 
     func showFilePicker() {

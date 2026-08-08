@@ -14,6 +14,8 @@ DerivedData/
 *.bak
 companion/scripts/__pycache__/
 companion/tests/__pycache__/
+companion/desktop/node_modules/
+companion/desktop/dist/
 .grok-companion-state/
 .cursor/
 serve-live.pid

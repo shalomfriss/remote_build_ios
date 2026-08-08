@@ -7,6 +7,7 @@ struct AgentWorkspaceView: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedTab = WorkspaceTab.speech
     @State private var isSimulatorFullScreen = false
+    @State private var simulatorReloadID = UUID()
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -18,6 +19,7 @@ struct AgentWorkspaceView: View {
 
             RemoteSimulatorView(
                 isFullScreen: false,
+                reloadID: simulatorReloadID,
                 onToggleFullScreen: { isSimulatorFullScreen = true }
             )
                 .tabItem {
@@ -72,11 +74,13 @@ struct AgentWorkspaceView: View {
         .onChange(of: selectedTab) { _, tab in
             guard tab == .simulator else { return }
             model.isPromptFocused = false
+            simulatorReloadID = UUID()
             Task { await model.refreshSimulatorURL() }
         }
         .fullScreenCover(isPresented: $isSimulatorFullScreen) {
             RemoteSimulatorView(
                 isFullScreen: true,
+                reloadID: simulatorReloadID,
                 onToggleFullScreen: { isSimulatorFullScreen = false }
             )
             .environmentObject(model)

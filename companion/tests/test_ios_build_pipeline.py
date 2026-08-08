@@ -2,7 +2,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -30,6 +30,35 @@ def test_ios_build_requires_opt_in_and_simulator() -> None:
     })
 
 
+def test_ensure_simulator_booted_waits_for_selected_device() -> None:
+    listing = {
+        "devices": {"iOS": [{
+            "udid": "project-simulator",
+            "state": "Shutdown",
+        }]},
+    }
+    with patch.object(PIPELINE, "list_available_devices", return_value=listing), patch.object(
+        PIPELINE, "ensure_device_booted"
+    ) as ensure:
+        PIPELINE.ensure_simulator_booted("project-simulator")
+
+    ensure.assert_called_once_with("project-simulator", state="Shutdown")
+
+
+def test_ensure_simulator_booted_does_not_reboot_running_device() -> None:
+    listing = {
+        "devices": {"iOS": [{
+            "udid": "project-simulator",
+            "state": "Booted",
+        }]},
+    }
+    with patch.object(PIPELINE, "list_available_devices", return_value=listing) as devices, patch.object(
+        PIPELINE, "ensure_device_booted"
+    ) as ensure:
+        PIPELINE.ensure_simulator_booted("project-simulator")
+
+    devices.assert_called_once_with()
+    ensure.assert_called_once_with("project-simulator", state="Booted")
 def test_companion_startup_launches_latest_registered_project(tmp_path: Path) -> None:
     from project_registry import register_project
 
