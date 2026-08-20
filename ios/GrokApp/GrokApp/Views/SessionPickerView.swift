@@ -55,7 +55,11 @@ struct SessionPickerView: View {
                     VStack(spacing: 0) {
                         ForEach(model.sessionListEntries) { entry in
                             Button {
-                                model.resumeSession(id: entry.id, cwd: entry.cwd)
+                                model.resumeSession(
+                                    id: entry.id,
+                                    cwd: entry.cwd,
+                                    projectName: entry.displayName
+                                )
                             } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(entry.displayName)

@@ -9,6 +9,8 @@ struct AgentStatusBar: View {
     let theme: GrokTheme
     let isConnected: Bool
     let onBack: () -> Void
+    let onDisconnect: () -> Void
+    let onReconnect: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -53,12 +55,17 @@ struct AgentStatusBar: View {
                     .lineLimit(1)
             }
 
-            // Link status — top right, tiny dot only (no colored chrome).
-            Circle()
-                .fill(isConnected ? theme.accentSuccess : theme.accentError)
-                .frame(width: 6, height: 6)
-                .padding(.leading, 6)
-                .accessibilityLabel(isConnected ? "connected" : "disconnected")
+            Menu("Connection", systemImage: "cable.connector") {
+                if isConnected {
+                    Button("Disconnect", systemImage: "cable.connector.slash", action: onDisconnect)
+                } else {
+                    Button("Reconnect", systemImage: "arrow.clockwise", action: onReconnect)
+                }
+            }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(isConnected ? theme.accentSuccess : theme.accentError)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityValue(isConnected ? "Connected" : "Disconnected")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

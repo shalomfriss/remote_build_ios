@@ -53,3 +53,25 @@ def test_latest_registered_project_returns_last_added_project(tmp_path: Path) ->
     assert latest is not None
     assert latest["name"] == "Second"
     assert latest["path"] == str(second.resolve())
+
+
+def test_discovers_unregistered_xcode_projects_from_projects_root(tmp_path: Path) -> None:
+    project = tmp_path / "unregistered-app"
+    project.mkdir()
+    (project / "UnregisteredApp.xcodeproj").mkdir()
+    env = {"GROK_PROJECTS_ROOT": str(tmp_path)}
+
+    projects = REGISTRY.registered_projects(env)
+
+    assert len(projects) == 1
+    assert projects[0]["path"] == str(project.resolve())
+    assert projects[0]["name"] == "UnregisteredApp"
+
+
+def test_discovered_project_uses_metadata_name(tmp_path: Path) -> None:
+    project = tmp_path / "generated-folder-name"
+    project.mkdir()
+    (project / ".grok-build-project.json").write_text('{"name":"Readable Name"}')
+    env = {"GROK_PROJECTS_ROOT": str(tmp_path)}
+
+    assert REGISTRY.registered_projects(env)[0]["name"] == "Readable Name"

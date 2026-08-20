@@ -30,9 +30,9 @@ GATEWAY_PID=""
 GATEWAY_LOG=""
 PROJECT_SIM_UDID=""
 
-export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
+export PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:${HOME}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
-export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$HOME/Library/Application Support/GrokBuild/state}"
+export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$GROK_COMPANION_CWD/.grok-companion-state}"
 export GROK_PROJECTS_ROOT="${GROK_PROJECTS_ROOT:-$HOME/.projects}"
 export GROK_IOS_PROJECTS=1
 mkdir -p "$GROK_COMPANION_CWD" "$GROK_COMPANION_STATE_DIR"
@@ -59,16 +59,13 @@ echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
 echo ""
 
 if [[ "$SIMULATOR" != "1" ]]; then
-  REMOTE_ARGS=()
-  [[ "$USE_NGROK" -eq 1 ]] && REMOTE_ARGS+=(--ngrok)
-  [[ -n "$NGROK_URL" ]] && REMOTE_ARGS+=(--ngrok-url "$NGROK_URL")
+  BRIDGE_ARGS=(--real --agent "$AGENT" --host "$HOST" --port "$PORT")
+  [[ "$USE_NGROK" -eq 1 ]] && BRIDGE_ARGS+=(--ngrok)
+  [[ -n "$NGROK_URL" ]] && BRIDGE_ARGS+=(--ngrok-url "$NGROK_URL")
   if [[ "$HAS_FORWARD_ARGS" -eq 1 ]]; then
-    exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
-      --real --agent "$AGENT" --host "$HOST" --port "$PORT" \
-      "${REMOTE_ARGS[@]}" "${FORWARD_ARGS[@]}"
+    BRIDGE_ARGS+=("${FORWARD_ARGS[@]}")
   fi
-  exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" \
-    --real --agent "$AGENT" --host "$HOST" --port "$PORT" "${REMOTE_ARGS[@]}"
+  exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" "${BRIDGE_ARGS[@]}"
 fi
 
 cleanup() {
@@ -95,7 +92,7 @@ PROJECT_SIM_UDID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["udi
 PROJECT_SIM_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<<"$PROJECT_SIM_RUNTIME_JSON")"
 export GROK_AUTO_BUILD_IOS=1
 export GROK_SIMULATOR_UDID="$PROJECT_SIM_UDID"
-export GROK_IOS_DERIVED_DATA="${GROK_IOS_DERIVED_DATA:-$GROK_COMPANION_STATE_DIR/GeneratedAppDerivedData}"
+export GROK_IOS_DERIVED_DATA="${GROK_IOS_DERIVED_DATA:-$GROK_COMPANION_CWD/.grok-companion-state/DerivedData}"
 export GROK_SIMULATOR_STATE_FILE="${GROK_SIMULATOR_STATE_FILE:-$GROK_COMPANION_STATE_DIR/simulator-build.json}"
 rm -f "$GROK_SIMULATOR_STATE_FILE"
 
@@ -130,7 +127,10 @@ else
 fi
 serve_sim_streams_project_device() {
   curl --silent --fail --max-time 2 "http://127.0.0.1:${SIMULATOR_PORT}/grid/api" |
-    python3 -c 'import json,sys; udid=sys.argv[1]; payload=json.load(sys.stdin); raise SystemExit(0 if any(device.get("device") == udid and device.get("helper") for device in payload.get("devices", [])) else 1)' \
+    python3 -c 'import json,sys; udid=sys.argv[1]; raw=sys.stdin.read();
+try: payload=json.loads(raw)
+except (json.JSONDecodeError, TypeError): raise SystemExit(1)
+raise SystemExit(0 if any(device.get("device") == udid and device.get("helper") for device in payload.get("devices", [])) else 1)' \
       "$PROJECT_SIM_UDID"
 }
 
@@ -171,7 +171,8 @@ if ! start_serve_sim; then
 fi
 
 if [[ "$USE_NGROK" -eq 1 ]]; then
-  GATEWAY_LOG="$(mktemp -t grok-build-gateway.XXXXXX)"
+  GATEWAY_LOG="$GROK_COMPANION_STATE_DIR/gateway.log"
+  : >"$GATEWAY_LOG"
   npx --yes --package=ws -- node "$ROOT/companion/scripts/companion_gateway.js" \
     --host 127.0.0.1 --port "$GATEWAY_PORT" \
     --simulator-url "http://127.0.0.1:${SIMULATOR_PORT}" \
@@ -195,21 +196,43 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
     exit 1
   fi
 
-  SIM_NGROK_LOG="$(mktemp -t grok-build-simulator-ngrok.XXXXXX)"
-  NGROK_ARGS=(http "127.0.0.1:${GATEWAY_PORT}" --name grok-build-gateway --log stdout --log-format json)
-  [[ -n "$NGROK_URL" ]] && NGROK_ARGS+=(--url "$NGROK_URL")
-  ngrok "${NGROK_ARGS[@]}" >"$SIM_NGROK_LOG" 2>&1 &
-  SIM_NGROK_PID=$!
-  for _ in {1..150}; do
-    REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_endpoint.py" "$SIM_NGROK_LOG" https)"
-    [[ -n "$REMOTE_SIMULATOR_URL" ]] && break
-    if ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
-      echo "agent-phone: ngrok stopped before exposing serve-sim" >&2
-      tail -n 10 "$SIM_NGROK_LOG" >&2
-      exit 1
+  if [[ -n "$NGROK_URL" ]]; then
+    REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_agent.py" \
+      find --port "$GATEWAY_PORT" --scheme https --url "$NGROK_URL")"
+  else
+    REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_agent.py" \
+      find --port "$GATEWAY_PORT" --scheme https)"
+  fi
+  if [[ -n "$REMOTE_SIMULATOR_URL" ]]; then
+    echo "agent-phone: reusing local ngrok endpoint=${REMOTE_SIMULATOR_URL}"
+  else
+    if [[ -n "$NGROK_URL" ]]; then
+      python3 "$ROOT/companion/scripts/ngrok_agent.py" \
+        prune-stale --scheme https --url "$NGROK_URL"
+    else
+      python3 "$ROOT/companion/scripts/ngrok_agent.py" \
+        prune-stale --scheme https
     fi
-    sleep 0.1
-  done
+    SIM_NGROK_LOG="$GROK_COMPANION_STATE_DIR/ngrok-simulator.log"
+    : >"$SIM_NGROK_LOG"
+    NGROK_ARGS=(http "127.0.0.1:${GATEWAY_PORT}" --name grok-build-gateway --log stdout --log-format json)
+    [[ -n "$NGROK_URL" ]] && NGROK_ARGS+=(--url "$NGROK_URL")
+    ngrok "${NGROK_ARGS[@]}" >"$SIM_NGROK_LOG" 2>&1 &
+    SIM_NGROK_PID=$!
+    for _ in {1..150}; do
+      REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_endpoint.py" "$SIM_NGROK_LOG" https)"
+      [[ -n "$REMOTE_SIMULATOR_URL" ]] && break
+      if ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
+        echo "agent-phone: ngrok stopped before exposing serve-sim" >&2
+        if grep -q "ERR_NGROK_334" "$SIM_NGROK_LOG" 2>/dev/null; then
+          echo "agent-phone: the account's ngrok domain is owned by another active agent; stop it or pass --ngrok-url for a different domain" >&2
+        fi
+        tail -n 10 "$SIM_NGROK_LOG" >&2
+        exit 1
+      fi
+      sleep 0.1
+    done
+  fi
   if [[ -z "${REMOTE_SIMULATOR_URL:-}" ]]; then
     echo "agent-phone: timed out waiting for the serve-sim ngrok endpoint" >&2
     exit 1
@@ -221,7 +244,7 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
       REMOTE_SIMULATOR_READY=1
       break
     fi
-    if ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
+    if [[ -n "$SIM_NGROK_PID" ]] && ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
       break
     fi
     sleep 0.2

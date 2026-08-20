@@ -4,6 +4,14 @@
 import Foundation
 import Network
 
+struct SimulatorBuildInfo {
+    let url: URL?
+    let status: String?
+    let error: String?
+    let output: String
+    let generation: Int?
+}
+
 /// Typed ACP client: TLS pairing → initialize → resume/create session → prompt.
 @MainActor
 final class ACPClient: ObservableObject {
@@ -496,21 +504,29 @@ final class ACPClient: ObservableObject {
         )
     }
 
-    func fetchSimulatorInfo() async -> (url: URL?, status: String?, error: String?) {
-        guard isPaired else { return (nil, nil, nil) }
+    func fetchSimulatorInfo() async -> SimulatorBuildInfo {
+        guard isPaired else {
+            return SimulatorBuildInfo(
+                url: nil, status: nil, error: nil, output: "", generation: nil
+            )
+        }
         do {
             let response = try await sendRPC(
                 method: ACPProtocol.companionSimulatorInfoMethod,
                 params: .object([:])
             )
             let value = response.result?["url"]?.stringValue ?? ""
-            return (
+            return SimulatorBuildInfo(
                 url: URL(string: value),
                 status: response.result?["status"]?.stringValue,
-                error: response.result?["error"]?.stringValue
+                error: response.result?["error"]?.stringValue,
+                output: response.result?["output"]?.stringValue ?? "",
+                generation: response.result?["generation"]?.intValue
             )
         } catch {
-            return (nil, nil, nil)
+            return SimulatorBuildInfo(
+                url: nil, status: nil, error: nil, output: "", generation: nil
+            )
         }
     }
 
@@ -662,9 +678,10 @@ final class ACPClient: ObservableObject {
                 try await createSession(projectName: projectName)
             } else {
                 pendingProjectName = nil
-                if !(await resumeLastProjectIfAvailable()) {
-                    try await createSession(projectName: nil)
-                }
+                // A transport connection is only a control session. Projects are
+                // opened explicitly from the directory-backed Resume picker so an
+                // app relaunch never resurrects an old conversation implicitly.
+                try await createSession(projectName: nil)
             }
 
             isConnected = true

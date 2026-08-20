@@ -37,8 +37,9 @@ Remote access:
   --ngrok-url ADDRESS        Use a reserved ngrok TCP address (also GROK_NGROK_URL)
 
 Agent options:
-  --agent codex|claude|local   ACP backend (default: codex)
-  --model MODEL               Codex/local model; local must start with ollama/
+  --agent codex|claude|opencode|local
+                              ACP backend (default: codex)
+  --model MODEL               Optional backend model; local must start with ollama/
   --agent-command COMMAND     Custom ACP stdio command (overrides agent/model)
 EOF
 }
@@ -74,6 +75,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 export GROK_COMPANION_CWD="${GROK_COMPANION_CWD:-$(pwd)}"
+export GROK_COMPANION_STATE_DIR="${GROK_COMPANION_STATE_DIR:-$GROK_COMPANION_CWD/.grok-companion-state}"
+mkdir -p "$GROK_COMPANION_STATE_DIR"
 
 ARGS=(--host "$HOST" --port "$PORT" --upstream "$UPSTREAM")
 ARGS+=(--agent "$AGENT")
@@ -115,7 +118,8 @@ if [[ "$USE_NGROK" -eq 1 ]]; then
     exit 1
   fi
 
-  NGROK_LOG="$(mktemp -t grok-build-ngrok.XXXXXX)"
+  NGROK_LOG="$GROK_COMPANION_STATE_DIR/ngrok-acp.log"
+  : >"$NGROK_LOG"
   NGROK_ARGS=(tcp "127.0.0.1:${PORT}" --name grok-build-acp --log stdout --log-format json)
   [[ -n "$NGROK_URL" ]] && NGROK_ARGS+=(--url "$NGROK_URL")
   ngrok "${NGROK_ARGS[@]}" >"$NGROK_LOG" 2>&1 &

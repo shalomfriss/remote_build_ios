@@ -155,6 +155,62 @@ def test_simulator_run_rpc_reports_unconfigured_pipeline() -> None:
     assert json.loads(response)["error"]["code"] == -32000
 
 
+def test_build_pipelines_use_project_scoped_state_and_derived_data(tmp_path: Path) -> None:
+    first = tmp_path / "projects" / "first"
+    second = tmp_path / "projects" / "second"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    env = {
+        "GROK_IOS_DERIVED_DATA": str(tmp_path / "state" / "DerivedData"),
+        "GROK_SIMULATOR_STATE_FILE": str(tmp_path / "state" / "simulator-build.json"),
+    }
+
+    first_pipeline = PIPELINE.IOSBuildPipeline(first, env)
+    second_pipeline = PIPELINE.IOSBuildPipeline(second, env)
+
+    assert first_pipeline.derived_data != second_pipeline.derived_data
+    assert first_pipeline.state_file != second_pipeline.state_file
+    assert first_pipeline.state_file.parent == second_pipeline.state_file.parent
+
+
+def test_simulator_info_rpc_reads_current_project_pipeline(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    pipeline = PIPELINE.IOSBuildPipeline(workspace, {
+        "GROK_SIMULATOR_URL": "https://example.test",
+        "GROK_SIMULATOR_STATE_FILE": str(tmp_path / "simulator-build.json"),
+    })
+    PIPELINE.write_build_state(pipeline.state_file, {"status": "building"})
+    pipeline.output_file.write_text("Compile App.swift\nBUILD FAILED\n", encoding="utf-8")
+
+    response = BRIDGE.handle_simulator_run_rpc({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": COMPANION_EXT.SIMULATOR_INFO_METHOD,
+    }, pipeline)
+
+    assert response is not None
+    result = json.loads(response)["result"]
+    assert result["status"] == "building"
+    assert result["workspace"] == str(workspace)
+    assert result["output"] == "Compile App.swift\nBUILD FAILED\n"
+
+
+def test_streaming_command_forwards_command_and_every_output_line(tmp_path: Path) -> None:
+    output: list[str] = []
+
+    result = PIPELINE._run_streaming(
+        [sys.executable, "-c", "print('first'); print('second')"],
+        cwd=tmp_path,
+        on_output=output.append,
+    )
+
+    assert result.returncode == 0
+    assert output[0].startswith("$ ")
+    assert output[1:] == ["first\n", "second\n"]
+    assert result.stdout == "first\nsecond\n"
+
+
 def test_discovers_generated_project_and_scheme(tmp_path: Path) -> None:
     project = tmp_path / "Example.xcodeproj"
     project.mkdir()
@@ -249,6 +305,7 @@ def test_session_list_response_uses_project_metadata_name(tmp_path: Path) -> Non
         normalized = BRIDGE.enrich_session_list_response(response, {7})
     session = json.loads(normalized)["result"]["sessions"][0]
     assert session["projectName"] == "Trail Notes"
+    assert session["sessionId"].startswith("grok-project:")
 
 
 def test_session_list_response_adds_cli_registered_project(tmp_path: Path) -> None:
@@ -330,6 +387,7 @@ def test_session_list_response_falls_back_to_xcode_project_name(tmp_path: Path) 
         normalized = BRIDGE.enrich_session_list_response(response, {8})
     session = json.loads(normalized)["result"]["data"]["sessions"][0]
     assert session["projectName"] == "ExistingProject"
+    assert session["sessionId"].startswith("grok-project:")
 
 
 def test_resume_projects_excludes_sessions_outside_projects_root(tmp_path: Path) -> None:
@@ -337,6 +395,7 @@ def test_resume_projects_excludes_sessions_outside_projects_root(tmp_path: Path)
     project = projects / "fitness-app"
     unrelated = tmp_path / "other-workspace"
     project.mkdir(parents=True)
+    (project / "Fitness.xcodeproj").mkdir()
     unrelated.mkdir()
     response = (json.dumps({
         "jsonrpc": "2.0",
@@ -351,4 +410,6 @@ def test_resume_projects_excludes_sessions_outside_projects_root(tmp_path: Path)
         normalized = BRIDGE.enrich_session_list_response(response, {11})
 
     sessions = json.loads(normalized)["result"]["sessions"]
-    assert [session["sessionId"] for session in sessions] == ["inside"]
+    assert len(sessions) == 1
+    assert sessions[0]["cwd"] == str(project)
+    assert sessions[0]["sessionId"].startswith("grok-project:")

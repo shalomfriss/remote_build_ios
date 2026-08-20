@@ -173,7 +173,8 @@ enum ACPProtocol {
     }
 
     static func sessionNewParams(projectName: String? = nil) -> JSONValue {
-        // Official `grok agent serve` requires an absolute cwd (relative "." → -32602).
+        // The companion resolves a relative cwd to its configured workspace
+        // before forwarding this request to the ACP provider.
         var params: [String: JSONValue] = [
             "cwd": .string(CompanionConfig.workspaceCwd()),
             "mcpServers": .array([]),

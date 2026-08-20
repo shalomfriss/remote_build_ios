@@ -52,14 +52,28 @@ final class AppModel: ObservableObject {
     @Published private(set) var isSimulatorRunPending = false
     @Published var isNamingProject = false
     @Published var projectNameDraft = ""
+    @Published private(set) var savedEntryPoints: [CompanionConfig.EntryPoint] = []
+    @Published private(set) var isManuallyDisconnected = false
 
-    let acp = ACPClient()
+    @Published private(set) var acp = ACPClient()
     let companionBrowser = CompanionBrowser()
     private var acpBagForward: AnyCancellable?
     private var browserBagForward: AnyCancellable?
     private var isReconnecting = false
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttemptID: UUID?
     private var resumeTask: Task<Void, Never>?
     private var activeResumeAttempt: UUID?
+    private var manuallyDisconnectedSessionID: String?
+    private var activeProjectID: String?
+    private var projectClients: [String: ACPClient] = [:]
+    private var projectNames: [String: String] = [:]
+    private var projectCwds: [String: String] = [:]
+    private var simulatorStatusByProject: [String: String] = [:]
+    private var simulatorErrorByProject: [String: String] = [:]
+    private var simulatorOutputByProject: [String: String] = [:]
+    private var simulatorGenerationByProject: [String: Int] = [:]
+    private var simulatorPendingProjects: Set<String> = []
 
     var theme: GrokTheme { GrokTheme.load(named: themeName) }
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
@@ -150,23 +164,26 @@ final class AppModel: ObservableObject {
         acpPortDraft = String(ep.port)
         pairPinDraft = CompanionConfig.savedPIN
         fingerprintDraft = CompanionConfig.pinnedFingerprint
+        savedEntryPoints = CompanionConfig.savedEntryPoints
     }
 
-    private func wireACP() {
+    private func wireACP(_ client: ACPClient? = nil) {
+        let client = client ?? acp
         // Forward ACPClient publishes so AgentStatusBar connection dot refreshes.
-        acpBagForward = acp.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
+        acpBagForward = client.objectWillChange.sink { [weak self, weak client] _ in
+            guard let self, let client, self.acp === client else { return }
+            self.objectWillChange.send()
         }
         browserBagForward = companionBrowser.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
-        acp.alwaysApprove = alwaysApprove
-        acp.onModelChanged = { [weak self] modelId in
-            guard let self else { return }
+        client.alwaysApprove = alwaysApprove
+        client.onModelChanged = { [weak self, weak client] modelId in
+            guard let self, let client, self.acp === client else { return }
             self.chrome.modelId = modelId
         }
-        acp.onChromeChanged = { [weak self] chrome in
-            guard let self else { return }
+        client.onChromeChanged = { [weak self, weak client] chrome in
+            guard let self, let client, self.acp === client else { return }
             var c = chrome
             c.alwaysApprove = self.alwaysApprove
             self.chrome = c
@@ -179,21 +196,23 @@ final class AppModel: ObservableObject {
                 self.sessionTitle = c.loadingTitle
             }
         }
-        acp.onPermissionRequest = { [weak self] request in
-            self?.permissionRequest = request
+        client.onPermissionRequest = { [weak self, weak client] request in
+            guard let self, let client, self.acp === client else { return }
+            self.permissionRequest = request
         }
-        acp.onRosterChanged = { [weak self] entries in
-            guard let self else { return }
+        client.onRosterChanged = { [weak self, weak client] entries in
+            guard let self, let client, self.acp === client else { return }
             if self.screen == .dashboard {
-                self.applyRosterToDashboard(entries)
+                self.refreshDashboardActivity()
             }
         }
-        acp.onTransportLost = { [weak self] in
-            self?.handleTransportLost()
+        client.onTransportLost = { [weak self, weak client] in
+            guard let self, let client, self.acp === client else { return }
+            self.handleTransportLost()
         }
-        acp.tracker.onChange = { [weak self] entries in
-            guard let self else { return }
-            self.messages = self.acp.tracker.displayEntries(showThinking: self.showThinkingBlocks)
+        client.tracker.onChange = { [weak self, weak client] entries in
+            guard let self, let client, self.acp === client else { return }
+            self.messages = client.tracker.displayEntries(showThinking: self.showThinkingBlocks)
             self.refreshSessionTitle(from: entries)
         }
     }
@@ -231,7 +250,18 @@ final class AppModel: ObservableObject {
 
     func openDashboardRow(_ row: DashboardRowModel) {
         if let sid = row.sessionId, !sid.isEmpty {
-            resumeSession(id: sid)
+            if let client = projectClients[sid] {
+                activateProjectClient(client, projectID: sid)
+                screen = .agent
+                reconnectBanner = client.sessionReady ? nil : client.lastError
+                Task { await refreshSimulatorURL() }
+            } else {
+                resumeSession(
+                    id: sid,
+                    cwd: projectCwds[sid],
+                    projectName: row.title
+                )
+            }
         } else {
             showAgent()
         }
@@ -246,13 +276,8 @@ final class AppModel: ObservableObject {
             acp.connect()
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
-        let roster = await acp.listRoster()
-        if !roster.isEmpty {
-            applyRosterToDashboard(roster)
-            return
-        }
-        // Fallback: resume list (idle only) when fleet roster unavailable.
         let entries = await acp.listSessions()
+        sessionListEntries = entries
         dashboardRows = entries.map { e in
             let title: String
             if !e.title.isEmpty {
@@ -270,6 +295,42 @@ final class AppModel: ObservableObject {
                 ageLabel: nil
             )
         }
+        refreshDashboardActivity()
+    }
+
+    func refreshDashboardActivity() {
+        var rowsBySession = Dictionary(
+            uniqueKeysWithValues: dashboardRows.compactMap { row in
+                row.sessionId.map { ($0, row) }
+            }
+        )
+        for (projectID, client) in projectClients {
+            let state: DashboardRowModel.State
+            let activity: String?
+            if client.isRunning {
+                state = .working
+                activity = client.chrome.turnActivity ?? "working"
+            } else if client.sessionReady {
+                state = .idle
+                activity = "ready"
+            } else {
+                state = .needsInput
+                activity = client.lastError ?? "reconnecting"
+            }
+            let title = projectNames[projectID]
+                ?? projectCwds[projectID].map { URL(fileURLWithPath: $0).lastPathComponent }
+                ?? "Project"
+            rowsBySession[projectID] = DashboardRowModel(
+                sessionId: projectID,
+                title: title,
+                state: state,
+                activity: activity,
+                ageLabel: nil
+            )
+        }
+        let catalogOrder = sessionListEntries.map(\.id)
+        let remaining = rowsBySession.keys.filter { !catalogOrder.contains($0) }.sorted()
+        dashboardRows = (catalogOrder + remaining).compactMap { rowsBySession[$0] }
     }
 
     private func applyRosterToDashboard(_ roster: [RosterSessionEntry]) {
@@ -376,6 +437,7 @@ final class AppModel: ObservableObject {
 
     /// Reconnect after background / Wi‑Fi blip — preserves session when possible.
     func reconnectTransportIfNeeded() {
+        guard !isManuallyDisconnected else { return }
         guard canStartSession else { return }
         guard screen == .agent || screen == .dashboard else { return }
         guard !acp.sessionReady else {
@@ -386,14 +448,25 @@ final class AppModel: ObservableObject {
         guard !isReconnecting else { return }
         isReconnecting = true
         reconnectBanner = "Reconnecting…"
-        let resumeId = acp.sessionId
+        let resumeId = manuallyDisconnectedSessionID ?? acp.sessionId
+        reconnectTask?.cancel()
+        let reconnectAttemptID = UUID()
+        self.reconnectAttemptID = reconnectAttemptID
         acp.reconnect(preserveSessionId: resumeId)
-        Task { @MainActor in
-            defer { self.isReconnecting = false }
+        reconnectTask = Task { @MainActor in
+            defer {
+                if self.reconnectAttemptID == reconnectAttemptID {
+                    self.isReconnecting = false
+                    self.reconnectTask = nil
+                    self.reconnectAttemptID = nil
+                }
+            }
             var deadline = Date.now.addingTimeInterval(20)
             var triedRemoteFallback = false
             while Date.now < deadline {
+                guard !Task.isCancelled, !self.isManuallyDisconnected else { return }
                 if self.acp.sessionReady {
+                    self.manuallyDisconnectedSessionID = nil
                     self.simulatorURL = await self.acp.fetchSimulatorURL()
                     self.reconnectBanner = nil
                     return
@@ -419,6 +492,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handleTransportLost() {
+        guard !isManuallyDisconnected else { return }
         guard screen == .agent || screen == .dashboard else { return }
         simulatorURL = nil
         reconnectBanner = "Disconnected — reconnecting…"
@@ -470,19 +544,43 @@ final class AppModel: ObservableObject {
         sessionListEntries = await acp.listSessions()
     }
 
-    func resumeSession(id: String, cwd: String? = nil) {
+    func resumeSession(
+        id: String,
+        cwd: String? = nil,
+        projectName: String? = nil
+    ) {
         guard canStartSession else { showOnboarding(); return }
+        if let existing = projectClients[id],
+           existing.isConnected || existing.sessionReady || existing.isRunning {
+            activateProjectClient(existing, projectID: id)
+            screen = .agent
+            reconnectBanner = nil
+            Task { await refreshSimulatorURL() }
+            return
+        }
         resumeTask?.cancel()
         let attemptID = UUID()
         activeResumeAttempt = attemptID
-        screen = .agent
-        acp.tracker.reset()
-        if let preferredBonjourEndpoint {
-            acp.setPreferredEndpoint(preferredBonjourEndpoint)
-        } else {
-            acp.setPreferredEndpoint(nil)
+        if let existing = projectClients[id] {
+            existing.disconnect()
         }
-        reconnectBanner = "Resuming session…"
+        let client = ACPClient()
+        projectClients[id] = client
+        if let cwd, !cwd.isEmpty {
+            projectCwds[id] = cwd
+        }
+        if let projectName, !projectName.isEmpty {
+            projectNames[id] = projectName
+        }
+        activateProjectClient(client, projectID: id)
+        screen = .agent
+        if let preferredBonjourEndpoint {
+            client.setPreferredEndpoint(preferredBonjourEndpoint)
+        } else {
+            client.setPreferredEndpoint(nil)
+        }
+        let resumeDisplayName = projectName ?? "project"
+        reconnectBanner = "Starting \(resumeDisplayName) from scratch…"
         resumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -491,30 +589,27 @@ final class AppModel: ObservableObject {
                 }
             }
 
-            // The session picker is populated over an already initialized ACP
-            // connection. Reuse it so Resume does not kill the working bridge and
-            // briefly expose a paired transport with no usable session.
-            if self.acp.isConnected, self.acp.isPaired, self.acp.sessionReady {
-                do {
-                    try await self.acp.loadSession(
-                        id,
-                        cwd: cwd,
-                        showLatestMessage: true
-                    )
-                    guard !Task.isCancelled else { return }
-                    self.simulatorURL = await self.acp.fetchSimulatorURL()
-                    self.reconnectBanner = nil
-                    return
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    // The socket can disappear between listing and loading a
-                    // project. Recover below instead of surfacing the first write.
-                    self.reconnectBanner = "Connection interrupted — retrying…"
-                }
-            }
-
             await self.reconnectAndResumeSession(id: id, cwd: cwd)
         }
+    }
+
+    private func activateProjectClient(_ client: ACPClient, projectID: String) {
+        if activeProjectID == nil, acp !== client {
+            acp.disconnect()
+        }
+        activeProjectID = projectID
+        acp = client
+        wireACP(client)
+        client.alwaysApprove = alwaysApprove
+        chrome = client.chrome
+        messages = client.tracker.displayEntries(showThinking: showThinkingBlocks)
+        permissionRequest = nil
+        simulatorURL = nil
+        simulatorBuildStatus = simulatorStatusByProject[projectID]
+        simulatorBuildError = simulatorErrorByProject[projectID]
+        isSimulatorRunPending = simulatorPendingProjects.contains(projectID)
+        sessionTitle = projectNames[projectID] ?? "loading..."
+        refreshSessionTitle(from: messages)
     }
 
     private func reconnectAndResumeSession(id: String, cwd: String?) async {
@@ -598,6 +693,7 @@ final class AppModel: ObservableObject {
 
     /// Connect to the provider-neutral ACP bridge with its six-digit pairing PIN.
     func connectWithPINAndVerify() {
+        isManuallyDisconnected = false
         let secret = pairPinDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard secret.count >= 4 else {
             let msg = "Paste the PIN printed by `agent-phone`."
@@ -648,6 +744,8 @@ final class AppModel: ObservableObject {
     }
 
     private func verifyCompanionConnection(allowBonjourFallback: Bool = true) async {
+        var setupRetriesRemaining = 2
+        var deadline = Date.now.addingTimeInterval(30)
         connectionPhase = .checking
         setupError = nil
         acp.disconnect()
@@ -657,10 +755,22 @@ final class AppModel: ObservableObject {
         }
         acp.connect()
 
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline {
-            if Task.isCancelled { return }
+        while Date.now < deadline {
+            if Task.isCancelled || isManuallyDisconnected { return }
             if let err = acp.lastError, !err.isEmpty {
+                if setupRetriesRemaining > 0, isRecoverableSetupDisconnect(err) {
+                    setupRetriesRemaining -= 1
+                    setupError = "Agent restarted during setup. Reconnecting…"
+                    acp.disconnect()
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, !isManuallyDisconnected else { return }
+                    if let preferredBonjourEndpoint {
+                        acp.setPreferredEndpoint(preferredBonjourEndpoint)
+                    }
+                    acp.connect()
+                    deadline = Date.now.addingTimeInterval(30)
+                    continue
+                }
                 if await retryWithRemoteCompanion() {
                     return
                 }
@@ -673,6 +783,7 @@ final class AppModel: ObservableObject {
                 return
             }
             if acp.sessionReady, acp.sessionId != nil {
+                manuallyDisconnectedSessionID = nil
                 simulatorURL = await acp.fetchSimulatorURL()
                 connectionPhase = .succeeded
                 setupError = nil
@@ -682,7 +793,7 @@ final class AppModel: ObservableObject {
                 }
                 return
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(for: .milliseconds(250))
         }
         let msg = acp.lastError
             ?? "Could not reach agent — is `agent-phone` running?"
@@ -695,6 +806,12 @@ final class AppModel: ObservableObject {
         connectionPhase = .failed(msg)
         setupError = msg
         acp.disconnect()
+    }
+
+    private func isRecoverableSetupDisconnect(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("closed the connection during setup")
+            || normalized.contains("agent connection closed")
     }
 
     private func retryWithRemoteCompanion() async -> Bool {
@@ -747,7 +864,9 @@ final class AppModel: ObservableObject {
 
     func saveManualCompanion() {
         if let remote = CompanionConfig.parseRemoteAddress(acpHostDraft) {
-            acpHostDraft = remote.host
+            acpHostDraft = remote.useWebSocket
+                ? "\(remote.useTLS ? "wss" : "ws")://\(remote.host)/acp"
+                : remote.host
             acpPortDraft = String(remote.port)
             CompanionConfig.save(
                 host: remote.host,
@@ -765,6 +884,61 @@ final class AppModel: ObservableObject {
         CompanionConfig.save(host: host, port: port, useTLS: true, useWebSocket: false)
         preferredBonjourEndpoint = nil
         acp.setPreferredEndpoint(nil)
+    }
+
+    func saveCurrentEntryPoint() {
+        saveManualCompanion()
+        CompanionConfig.saveEntryPoint(endpoint: CompanionConfig.resolved())
+        savedEntryPoints = CompanionConfig.savedEntryPoints
+    }
+
+    func useEntryPoint(_ entryPoint: CompanionConfig.EntryPoint) {
+        manuallyDisconnectedSessionID = acp.sessionId
+        acp.disconnect()
+        clearBonjourPreference()
+        CompanionConfig.save(
+            host: entryPoint.host,
+            port: entryPoint.port,
+            useTLS: entryPoint.useTLS,
+            useWebSocket: entryPoint.useWebSocket
+        )
+        acpHostDraft = entryPoint.address
+        acpPortDraft = String(entryPoint.port)
+        connectionPhase = .idle
+        setupError = nil
+        isManuallyDisconnected = true
+    }
+
+    func deleteEntryPoint(_ entryPoint: CompanionConfig.EntryPoint) {
+        CompanionConfig.deleteEntryPoint(id: entryPoint.id)
+        savedEntryPoints = CompanionConfig.savedEntryPoints
+    }
+
+    func disconnectFromCompanion() {
+        manuallyDisconnectedSessionID = acp.sessionId
+        isManuallyDisconnected = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttemptID = nil
+        resumeTask?.cancel()
+        resumeTask = nil
+        activeResumeAttempt = nil
+        isReconnecting = false
+        reconnectBanner = "Disconnected"
+        simulatorURL = nil
+        connectionPhase = .idle
+        acp.disconnect()
+    }
+
+    func reconnectToCompanion() {
+        guard isManuallyDisconnected || !acp.sessionReady else { return }
+        isManuallyDisconnected = false
+        reconnectBanner = nil
+        if screen == .onboarding || screen == .settings {
+            connectWithPINAndVerify()
+        } else {
+            reconnectTransportIfNeeded()
+        }
     }
 
     func savePairing() {
@@ -808,10 +982,13 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSimulatorURL() async {
-        let info = await acp.fetchSimulatorInfo()
+        let client = acp
+        let activeID = activeProjectID
+        let projectID = activeID ?? "active-project"
+        let info = await client.fetchSimulatorInfo()
+        applySimulatorInfo(info, client: client, projectID: projectID)
+        guard acp === client, activeProjectID == activeID else { return }
         simulatorURL = info.url
-        simulatorBuildStatus = info.status
-        simulatorBuildError = info.error
     }
 
     func monitorSimulator() async {
@@ -835,45 +1012,105 @@ final class AppModel: ObservableObject {
 
     func runCurrentProject() {
         guard canRunCurrentProject else { return }
-        acp.tracker.appendUser("run the project")
+        let client = acp
+        let projectID = activeProjectID ?? "active-project"
+        client.tracker.appendUser("run the project")
+        simulatorPendingProjects.insert(projectID)
         isSimulatorRunPending = true
         simulatorBuildStatus = "queued"
         simulatorBuildError = nil
+        simulatorStatusByProject[projectID] = "queued"
+        simulatorErrorByProject[projectID] = nil
+        simulatorOutputByProject[projectID] = ""
+        simulatorGenerationByProject[projectID] = nil
+        client.tracker.appendSystem("[ios-build] Build queued")
         Task { @MainActor [weak self] in
             guard let self else { return }
             let minimumIndicatorEnd = ContinuousClock.now.advanced(by: .seconds(1))
             do {
-                try await self.acp.runSimulatorApp()
-                await self.waitForSimulatorBuild()
+                try await client.runSimulatorApp()
+                await self.waitForSimulatorBuild(client: client, projectID: projectID)
             } catch {
-                self.simulatorBuildStatus = "failed"
-                self.simulatorBuildError = error.localizedDescription
-                self.acp.tracker.appendError(error.localizedDescription)
+                self.simulatorStatusByProject[projectID] = "failed"
+                self.simulatorErrorByProject[projectID] = error.localizedDescription
+                if self.activeProjectID == projectID, self.acp === client {
+                    self.simulatorBuildStatus = "failed"
+                    self.simulatorBuildError = error.localizedDescription
+                }
+                client.tracker.appendError(error.localizedDescription)
             }
             let remaining = ContinuousClock.now.duration(to: minimumIndicatorEnd)
             if remaining > .zero {
                 try? await Task.sleep(for: remaining)
             }
-            self.isSimulatorRunPending = false
+            self.simulatorPendingProjects.remove(projectID)
+            if self.activeProjectID == projectID, self.acp === client {
+                self.isSimulatorRunPending = false
+            }
         }
     }
 
-    private func waitForSimulatorBuild() async {
+    private func waitForSimulatorBuild(client: ACPClient, projectID: String) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(300))
         repeat {
-            await refreshSimulatorURL()
-            if simulatorBuildStatus == "ready" || simulatorBuildStatus == "failed" {
+            let info = await client.fetchSimulatorInfo()
+            applySimulatorInfo(info, client: client, projectID: projectID)
+            if info.status == "ready" || info.status == "failed" {
                 return
             }
             try? await Task.sleep(for: .milliseconds(500))
         } while !Task.isCancelled && ContinuousClock.now < deadline
 
-        guard simulatorBuildStatus == "queued" || simulatorBuildStatus == "building" else {
+        let lastStatus = simulatorStatusByProject[projectID]
+        guard lastStatus == "queued" || lastStatus == "building" else {
             return
         }
-        simulatorBuildStatus = "failed"
-        simulatorBuildError = "The simulator build timed out. Check the companion output."
-        acp.tracker.appendError(simulatorBuildError ?? "The simulator build timed out.")
+        let timeoutError = "The simulator build timed out. Check the companion output."
+        simulatorStatusByProject[projectID] = "failed"
+        simulatorErrorByProject[projectID] = timeoutError
+        if activeProjectID == projectID, acp === client {
+            simulatorBuildStatus = "failed"
+            simulatorBuildError = timeoutError
+        }
+        client.tracker.appendError(timeoutError)
+    }
+
+    private func applySimulatorInfo(
+        _ info: SimulatorBuildInfo,
+        client: ACPClient,
+        projectID: String
+    ) {
+        let previousStatus = simulatorStatusByProject[projectID]
+        if let generation = info.generation,
+           simulatorGenerationByProject[projectID] != generation {
+            simulatorGenerationByProject[projectID] = generation
+            simulatorOutputByProject[projectID] = ""
+        }
+
+        let previousOutput = simulatorOutputByProject[projectID] ?? ""
+        let newOutput: String
+        if info.output.hasPrefix(previousOutput) {
+            newOutput = String(info.output.dropFirst(previousOutput.count))
+        } else {
+            newOutput = info.output
+        }
+        simulatorOutputByProject[projectID] = info.output
+        let displayOutput = newOutput.trimmingCharacters(in: .newlines)
+        if !displayOutput.isEmpty {
+            client.tracker.appendSystem(displayOutput)
+        }
+
+        simulatorStatusByProject[projectID] = info.status
+        simulatorErrorByProject[projectID] = info.error
+        if activeProjectID == projectID || (activeProjectID == nil && projectID == "active-project"),
+           acp === client {
+            simulatorURL = info.url
+            simulatorBuildStatus = info.status
+            simulatorBuildError = info.error
+        }
+        if info.status == "failed", previousStatus != "failed", let error = info.error {
+            client.tracker.appendError(error)
+        }
     }
 
     func requestNewProject() {
@@ -894,13 +1131,19 @@ final class AppModel: ObservableObject {
     }
 
     private func startNewSession(named projectName: String) {
+        let projectID = "new-project:\(UUID().uuidString)"
+        let client = ACPClient()
+        projectClients[projectID] = client
+        projectNames[projectID] = projectName
+        activateProjectClient(client, projectID: projectID)
+        if let preferredBonjourEndpoint {
+            client.setPreferredEndpoint(preferredBonjourEndpoint)
+        }
         draft = ""
-        acp.tracker.reset()
         messages = []
-        sessionTitle = "loading..."
+        sessionTitle = projectName
         screen = .agent
-        // This method also carries the name through a new connection handshake.
-        Task { await acp.startFreshSession(named: projectName) }
+        Task { await client.startFreshSession(named: projectName) }
     }
 
     /// Upstream welcome prompt submit: type a message → enter agent session with that prompt.
@@ -926,8 +1169,21 @@ final class AppModel: ObservableObject {
     /// Upstream welcome Quit — return stays on welcome (iOS has no process exit).
     func quitFromWelcome() {
         draft = ""
+        for client in projectClients.values {
+            client.disconnect()
+        }
+        projectClients.removeAll()
+        projectNames.removeAll()
+        projectCwds.removeAll()
+        simulatorStatusByProject.removeAll()
+        simulatorErrorByProject.removeAll()
+        simulatorOutputByProject.removeAll()
+        simulatorGenerationByProject.removeAll()
+        simulatorPendingProjects.removeAll()
+        activeProjectID = nil
         acp.disconnect()
-        acp.tracker.reset()
+        acp = ACPClient()
+        wireACP()
         messages = []
         screen = .welcome
     }

@@ -40,7 +40,13 @@ def _read_registry(env: Mapping[str, str] = os.environ) -> list[dict[str, str]]:
 
 
 def registered_projects(env: Mapping[str, str] = os.environ) -> list[dict[str, str]]:
-    projects: list[dict[str, str]] = []
+    """Return the project catalog, using the configured directory as truth.
+
+    The registry only supplies names and recency metadata. A project does not
+    need to have been explicitly registered to appear in Resume Project.
+    """
+    root = projects_root(env).expanduser()
+    projects_by_path: dict[Path, dict[str, str]] = {}
     for entry in _read_registry(env):
         path = entry.get("path")
         name = entry.get("name")
@@ -49,12 +55,40 @@ def registered_projects(env: Mapping[str, str] = os.environ) -> list[dict[str, s
         resolved = Path(path).expanduser()
         if not resolved.is_dir() or not name.strip():
             continue
-        projects.append({
+        canonical = resolved.resolve()
+        projects_by_path[canonical] = {
             "path": str(resolved.resolve()),
             "name": name.strip(),
             "addedAt": str(entry.get("addedAt") or ""),
-        })
-    return projects
+        }
+
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        children = []
+    for child in children:
+        if child.name.startswith(".") or not _is_project_directory(child):
+            continue
+        canonical = child.resolve()
+        if canonical in projects_by_path:
+            continue
+        try:
+            modified = datetime.fromtimestamp(
+                child.stat().st_mtime,
+                timezone.utc,
+            ).isoformat()
+        except OSError:
+            modified = ""
+        projects_by_path[canonical] = {
+            "path": str(canonical),
+            "name": default_project_name(canonical),
+            "addedAt": modified,
+        }
+
+    return sorted(
+        projects_by_path.values(),
+        key=lambda project: (project["addedAt"], project["path"]),
+    )
 
 
 def latest_registered_project(
@@ -77,6 +111,14 @@ def default_project_name(path: Path) -> str:
     if xcode_projects:
         return xcode_projects[0].stem
     return path.name
+
+
+def _is_project_directory(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    if (path / ".grok-build-project.json").is_file():
+        return True
+    return any(path.glob("*.xcodeproj")) or any(path.glob("*.xcworkspace"))
 
 
 def register_project(

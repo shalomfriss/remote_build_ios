@@ -58,6 +58,27 @@ def test_claude_command_falls_back_to_npx() -> None:
     assert command == ["/bin/npx", "--yes", "@agentclientprotocol/claude-agent-acp"]
 
 
+def test_opencode_command_uses_native_acp_backend() -> None:
+    with patch.object(BRIDGE.shutil, "which", return_value="/bin/opencode"):
+        command = BRIDGE.find_agent("opencode")
+    assert command == ["/bin/opencode", "acp"]
+
+
+def test_opencode_model_uses_configured_provider_model() -> None:
+    with patch.object(BRIDGE.shutil, "which", return_value="/bin/opencode"):
+        command = BRIDGE.find_agent("opencode", model="anthropic/claude-sonnet-4-5")
+    assert command is not None
+    assert command[0] == "/usr/bin/env"
+    assert command[-2:] == ["/bin/opencode", "acp"]
+    config = json.loads(command[1].removeprefix("OPENCODE_CONFIG_CONTENT="))
+    assert config == {"model": "anthropic/claude-sonnet-4-5"}
+
+
+def test_opencode_requires_installed_executable() -> None:
+    with patch.object(BRIDGE.shutil, "which", return_value=None):
+        assert BRIDGE.find_agent("opencode") is None
+
+
 def test_local_command_is_pinned_to_ollama_provider() -> None:
     with patch.object(BRIDGE.shutil, "which", return_value="/bin/opencode"):
         command = BRIDGE.find_agent("local")

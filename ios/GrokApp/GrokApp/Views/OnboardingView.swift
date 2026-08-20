@@ -29,6 +29,7 @@ struct OnboardingView: View {
                 header(theme: theme)
                 secretConnectSection(theme: theme)
                 connectionStatus(theme: theme)
+                entryPointsSection(theme: theme)
 
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
                     advancedSection(theme: theme)
@@ -131,11 +132,19 @@ struct OnboardingView: View {
                 .disabled(isChecking || isConnectedOK)
 
             if isConnectedOK {
-                HStack(spacing: 8) {
-                    Circle().fill(theme.accentSuccess).frame(width: 6, height: 6)
-                    Text("connected")
-                        .font(.body.monospaced())
-                        .foregroundStyle(theme.textPrimary)
+                VStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        Circle().fill(theme.accentSuccess).frame(width: 6, height: 6)
+                        Text("connected")
+                            .font(.body.monospaced())
+                            .foregroundStyle(theme.textPrimary)
+                    }
+                    Button("Disconnect", systemImage: "cable.connector.slash") {
+                        model.disconnectFromCompanion()
+                    }
+                    .font(.caption.monospaced())
+                    .foregroundStyle(theme.accentError)
+                    .frame(minHeight: 44)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -150,7 +159,7 @@ struct OnboardingView: View {
                                 .controlSize(.mini)
                                 .tint(theme.textPrimary)
                         }
-                        Text(isChecking ? "connecting…" : "connect")
+                        Text(isChecking ? "connecting…" : (model.isManuallyDisconnected ? "reconnect" : "connect"))
                             .font(.body.monospaced())
                             .foregroundStyle(theme.bgBase)
                     }
@@ -160,6 +169,58 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isChecking)
+            }
+        }
+    }
+
+    private func entryPointsSection(theme: GrokTheme) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Saved entry points")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                Button("Save Entry Point", systemImage: "plus", action: model.saveCurrentEntryPoint)
+                    .font(.caption.monospaced())
+                    .disabled(isChecking || model.acpHostDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if model.savedEntryPoints.isEmpty {
+                Text("Save an address to switch between LAN and remote companions quickly.")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(theme.textSecondary)
+            } else {
+                ForEach(model.savedEntryPoints) { entryPoint in
+                    HStack(spacing: 8) {
+                        Button {
+                            model.useEntryPoint(entryPoint)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entryPoint.name)
+                                    .font(.body.monospaced())
+                                    .foregroundStyle(theme.textPrimary)
+                                Text(entryPoint.address)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isChecking)
+
+                        Button("Delete \(entryPoint.name)", systemImage: "trash") {
+                            model.deleteEntryPoint(entryPoint)
+                        }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(theme.accentError)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .disabled(isChecking)
+                    }
+                    .padding(.horizontal, 10)
+                    .background(theme.bgTerminal)
+                    .overlay(Rectangle().stroke(theme.promptBorder, lineWidth: 1))
+                }
             }
         }
     }

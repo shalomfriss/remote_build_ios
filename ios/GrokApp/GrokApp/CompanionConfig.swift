@@ -20,6 +20,21 @@ enum CompanionConfig {
         var useWebSocket: Bool = false
     }
 
+    struct EntryPoint: Codable, Equatable, Identifiable {
+        let id: UUID
+        var name: String
+        var host: String
+        var port: Int
+        var useTLS: Bool
+        var useWebSocket: Bool
+
+        var address: String {
+            let scheme = useWebSocket ? (useTLS ? "wss" : "ws") : "tcp"
+            let path = useWebSocket ? "/acp" : ""
+            return "\(scheme)://\(host):\(port)\(path)"
+        }
+    }
+
     static let defaultPort = 7391
     /// Legacy Grok WebSocket bind port.
     static let defaultWebSocketPort = 2419
@@ -36,6 +51,7 @@ enum CompanionConfig {
     private static let wsKey = "GROK_USE_WEBSOCKET"
     private static let lastSessionIDKey = "GROK_LAST_SESSION_ID"
     private static let lastSessionCwdKey = "GROK_LAST_SESSION_CWD"
+    private static let entryPointsKey = "GROK_SAVED_ENTRY_POINTS"
 
     static var isOnboarded: Bool {
         get { UserDefaults.standard.bool(forKey: onboardedKey) }
@@ -87,8 +103,9 @@ enum CompanionConfig {
            cwd.hasPrefix("/") {
             return cwd
         }
-        // Fallback absolute path accepted by `grok agent serve`.
-        return "/tmp"
+        // The companion resolves this against its configured workspace before
+        // forwarding the request, so the phone never invents a Mac temp path.
+        return "."
     }
 
     static func saveWorkspaceCwd(_ cwd: String) {
@@ -138,6 +155,64 @@ enum CompanionConfig {
             forKey: tlsKey
         )
         UserDefaults.standard.set(useWebSocket, forKey: wsKey)
+    }
+
+    static var savedEntryPoints: [EntryPoint] {
+        guard let data = UserDefaults.standard.data(forKey: entryPointsKey),
+              let entries = try? JSONDecoder().decode([EntryPoint].self, from: data) else {
+            return []
+        }
+        return entries
+    }
+
+    @discardableResult
+    static func saveEntryPoint(
+        name: String? = nil,
+        endpoint: Endpoint = resolved()
+    ) -> EntryPoint {
+        var entries = savedEntryPoints
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedName = trimmedName?.isEmpty == false ? trimmedName : nil
+        let existingIndex = entries.firstIndex {
+            $0.host.caseInsensitiveCompare(endpoint.host) == .orderedSame
+                && $0.port == endpoint.port
+                && $0.useTLS == endpoint.useTLS
+                && $0.useWebSocket == endpoint.useWebSocket
+        }
+        let fallbackName = endpoint.host
+        if let existingIndex {
+            let old = entries[existingIndex]
+            entries[existingIndex] = EntryPoint(
+                id: old.id,
+                name: requestedName ?? old.name,
+                host: endpoint.host,
+                port: endpoint.port,
+                useTLS: endpoint.useTLS,
+                useWebSocket: endpoint.useWebSocket
+            )
+        } else {
+            entries.append(
+                EntryPoint(
+                    id: UUID(),
+                    name: requestedName ?? fallbackName,
+                    host: endpoint.host,
+                    port: endpoint.port,
+                    useTLS: endpoint.useTLS,
+                    useWebSocket: endpoint.useWebSocket
+                )
+            )
+        }
+        persistEntryPoints(entries)
+        return entries[existingIndex ?? entries.index(before: entries.endIndex)]
+    }
+
+    static func deleteEntryPoint(id: UUID) {
+        persistEntryPoints(savedEntryPoints.filter { $0.id != id })
+    }
+
+    private static func persistEntryPoints(_ entries: [EntryPoint]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: entryPointsKey)
     }
 
     /// HTTPS WebSocket endpoints cannot be downgraded to plaintext by stale preferences.

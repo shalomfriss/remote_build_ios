@@ -89,6 +89,12 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.bgTerminal)
+        .task {
+            while !Task.isCancelled {
+                model.refreshDashboardActivity()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     /// `Dashboard · N agents · M working` / `… awaiting` — render.rs title_parts.

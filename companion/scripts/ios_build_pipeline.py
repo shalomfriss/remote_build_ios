@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import hashlib
 import json
 import os
 import plistlib
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from project_registry import latest_registered_project, registered_projects
 from simulator_runtime import ensure_device_booted, list_available_devices
@@ -199,6 +201,70 @@ def _command_error(prefix: str, result: subprocess.CompletedProcess[str]) -> str
     return f"{prefix} (exit {result.returncode})" + (f":\n{tail}" if tail else "")
 
 
+def _run_streaming(
+    command: list[str],
+    *,
+    cwd: Path,
+    on_output: Callable[[str], None] | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command while forwarding every combined stdout/stderr line."""
+    emit = on_output or (lambda value: log(value.rstrip("\n")))
+    emit(f"$ {shlex.join(command)}\n")
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        output.append(line)
+        emit(line)
+    return subprocess.CompletedProcess(
+        command,
+        process.wait(),
+        stdout="".join(output),
+        stderr="",
+    )
+
+
+def _run_bounded(
+    command: list[str],
+    *,
+    cwd: Path,
+    on_output: Callable[[str], None] | None,
+    timeout: float = 45,
+) -> subprocess.CompletedProcess[str]:
+    """Run a short simulator command without allowing it to hang the pipeline."""
+    emit = on_output or (lambda value: log(value.rstrip("\n")))
+    emit(f"$ {shlex.join(command)}\n")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        captured = error.stdout or error.stderr or ""
+        if isinstance(captured, bytes):
+            captured = captured.decode("utf-8", errors="replace")
+        output = f"{captured}Command timed out after {timeout:g} seconds.\n"
+        emit(output)
+        return subprocess.CompletedProcess(command, 124, stdout=output, stderr="")
+    output = (result.stdout or "") + (result.stderr or "")
+    if output:
+        emit(output)
+    return subprocess.CompletedProcess(
+        command, result.returncode, stdout=output, stderr=""
+    )
+
+
 def _built_apps(derived_data: Path) -> list[Path]:
     products = derived_data / "Build" / "Products" / "Debug-iphonesimulator"
     if not products.is_dir():
@@ -255,6 +321,7 @@ def build_and_launch(
     udid: str,
     derived_data: Path,
     env: Mapping[str, str] = os.environ,
+    on_output: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
     ensure_simulator_booted(udid)
     workspace = resolve_build_workspace(workspace, env)
@@ -274,10 +341,9 @@ def build_and_launch(
         "-derivedDataPath",
         str(derived_data),
         "CODE_SIGNING_ALLOWED=NO",
-        "-quiet",
     ]
     log(f"building {target.scheme} from {target.container}")
-    result = subprocess.run(command, cwd=workspace, check=False, capture_output=True, text=True)
+    result = _run_streaming(command, cwd=workspace, on_output=on_output)
     if result.returncode != 0:
         raise RuntimeError(_command_error("iOS Simulator build failed", result))
 
@@ -286,25 +352,22 @@ def build_and_launch(
         raise RuntimeError("The iOS build succeeded but produced no runnable .app")
     app = max(apps, key=lambda path: path.stat().st_mtime)
     bundle_id = _bundle_id(app)
-    install = subprocess.run(
+    install = _run_bounded(
         ["xcrun", "simctl", "install", udid, str(app)],
-        check=False,
-        capture_output=True,
-        text=True,
+        cwd=workspace,
+        on_output=on_output,
     )
     if install.returncode != 0:
         raise RuntimeError(_command_error("Could not install the iOS app", install))
-    subprocess.run(
+    _run_bounded(
         ["xcrun", "simctl", "terminate", udid, bundle_id],
-        check=False,
-        capture_output=True,
-        text=True,
+        cwd=workspace,
+        on_output=on_output,
     )
-    launch = subprocess.run(
+    launch = _run_bounded(
         ["xcrun", "simctl", "launch", udid, bundle_id],
-        check=False,
-        capture_output=True,
-        text=True,
+        cwd=workspace,
+        on_output=on_output,
     )
     if launch.returncode != 0:
         raise RuntimeError(_command_error("Could not launch the iOS app", launch))
@@ -351,15 +414,26 @@ def launch_latest_registered_project(
     derived_data = Path(
         env.get("GROK_IOS_DERIVED_DATA", str(state_dir / "GeneratedAppDerivedData"))
     )
+    output_file = state_file.with_suffix(".log")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("", encoding="utf-8")
+
+    def append_output(value: str) -> None:
+        with output_file.open("a", encoding="utf-8") as handle:
+            handle.write(value)
+        log(value.rstrip("\n"))
+
     write_build_state(state_file, {
         "status": "building",
         "generation": 0,
         "projectName": project["name"],
     })
     try:
-        build = build_and_launch(Path(project["path"]), udid, derived_data, env)
+        build = build_and_launch(
+            Path(project["path"]), udid, derived_data, env, append_output
+        )
     except Exception as error:
-        log(str(error))
+        append_output(f"[ios-build] {error}\n")
         result = {
             "status": "failed",
             "generation": 0,
@@ -381,16 +455,21 @@ class IOSBuildPipeline:
     """Coalesce completed turns into serialized simulator builds."""
 
     def __init__(self, workspace: Path, env: Mapping[str, str] = os.environ) -> None:
-        self.workspace = workspace.resolve()
         self.env = dict(env)
         self.udid = self.env.get("GROK_SIMULATOR_UDID", "")
         state_dir = Path(self.env.get("GROK_COMPANION_STATE_DIR", str(Path.home() / ".grok")))
-        self.derived_data = Path(
+        self._derived_data_base = Path(
             self.env.get("GROK_IOS_DERIVED_DATA", str(state_dir / "GeneratedAppDerivedData"))
         )
-        self.state_file = Path(
+        self._state_file_base = Path(
             self.env.get("GROK_SIMULATOR_STATE_FILE", str(state_dir / "simulator-build.json"))
         )
+        self._output_file_base = self._state_file_base.with_suffix(".log")
+        self.workspace = workspace.resolve()
+        self.derived_data = self._derived_data_base
+        self.state_file = self._state_file_base
+        self.output_file = self._output_file_base
+        self.set_workspace(workspace)
         self.enabled = ios_build_enabled(self.env)
         self._requested = 0
         self._completed = 0
@@ -402,6 +481,33 @@ class IOSBuildPipeline:
 
     def set_workspace(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
+        scope = hashlib.sha256(str(self.workspace).encode("utf-8")).hexdigest()[:12]
+        self.derived_data = self._derived_data_base.with_name(
+            f"{self._derived_data_base.name}-{scope}"
+        )
+        self.state_file = self._state_file_base.with_name(
+            f"{self._state_file_base.stem}-{scope}{self._state_file_base.suffix}"
+        )
+        self.output_file = self._output_file_base.with_name(
+            f"{self._output_file_base.stem}-{scope}{self._output_file_base.suffix}"
+        )
+
+    def simulator_info(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "url": self.env.get("GROK_SIMULATOR_URL", ""),
+            "workspace": str(self.workspace),
+        }
+        try:
+            state = json.loads(self.state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return result
+        if isinstance(state, dict):
+            result.update(state)
+        try:
+            result["output"] = self.output_file.read_text(encoding="utf-8")
+        except OSError:
+            result["output"] = ""
+        return result
 
     def request_build(self) -> None:
         self._requested += 1
@@ -412,29 +518,52 @@ class IOSBuildPipeline:
     async def _run(self) -> None:
         while self._completed < self._requested:
             generation = self._requested
-            self._write_state({"status": "building", "generation": generation})
+            workspace = self.workspace
+            derived_data = self.derived_data
+            state_file = self.state_file
+            output_file = self.output_file
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("", encoding="utf-8")
+            self._write_state_to(
+                state_file, {"status": "building", "generation": generation}
+            )
             try:
                 result = await asyncio.to_thread(
                     build_and_launch,
-                    self.workspace,
+                    workspace,
                     self.udid,
-                    self.derived_data,
+                    derived_data,
                     self.env,
+                    lambda value: self._append_output_to(output_file, value),
                 )
             except Exception as error:
-                log(str(error))
-                self._write_state({
+                self._append_output_to(output_file, f"[ios-build] {error}\n")
+                self._write_state_to(state_file, {
                     "status": "failed",
                     "generation": generation,
                     "error": str(error),
                 })
             else:
-                self._write_state({"status": "ready", "generation": generation, **result})
+                self._write_state_to(
+                    state_file,
+                    {"status": "ready", "generation": generation, **result},
+                )
             self._completed = generation
 
-    def _write_state(self, value: dict[str, Any]) -> None:
+    def _append_output_to(self, output_file: Path, value: str) -> None:
         try:
-            write_build_state(self.state_file, value)
+            with output_file.open("a", encoding="utf-8") as handle:
+                handle.write(value)
+        except OSError as error:
+            log(f"could not write simulator output: {error}")
+        log(value.rstrip("\n"))
+
+    def _write_state(self, value: dict[str, Any]) -> None:
+        self._write_state_to(self.state_file, value)
+
+    def _write_state_to(self, state_file: Path, value: dict[str, Any]) -> None:
+        try:
+            write_build_state(state_file, value)
         except OSError as error:
             log(f"could not write simulator state: {error}")
 

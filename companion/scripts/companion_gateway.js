@@ -60,6 +60,7 @@ function relayACP(phone) {
     port: bridgePort,
     rejectUnauthorized: false,
   });
+  bridge.setKeepAlive(true, 10000);
   let buffered = Buffer.alloc(0);
 
   bridge.on("data", (chunk) => {
@@ -106,13 +107,36 @@ function proxySimulatorWebSocket(phone, request) {
 const server = http.createServer(proxyHTTP);
 server.on("upgrade", (request, socket, head) => {
   websocketServer.handleUpgrade(request, socket, head, (phone) => {
+    websocketServer.emit("connection", phone, request);
     if (new URL(request.url, "http://localhost").pathname === "/acp") relayACP(phone);
     else proxySimulatorWebSocket(phone, request);
   });
 });
 server.listen(port, host);
 
+// Keep the public WebSocket active through tunnels and mobile network changes.
+// The client also sends pings, but a server heartbeat prevents an idle proxy from
+// expiring the connection while the app is only displaying agent output.
+websocketServer.on("connection", (socket) => {
+  socket.isAlive = true;
+  socket.on("pong", () => {
+    socket.isAlive = true;
+  });
+});
+const heartbeat = setInterval(() => {
+  for (const socket of websocketServer.clients) {
+    if (!socket.isAlive) {
+      socket.terminate();
+      continue;
+    }
+    socket.isAlive = false;
+    socket.ping();
+  }
+}, 20000);
+heartbeat.unref();
+
 function shutdown() {
+  clearInterval(heartbeat);
   server.close(() => process.exit(0));
 }
 process.on("SIGINT", shutdown);

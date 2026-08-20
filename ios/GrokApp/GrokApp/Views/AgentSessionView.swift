@@ -14,7 +14,9 @@ struct AgentSessionView: View {
                 chrome: model.chrome,
                 theme: theme,
                 isConnected: model.acp.sessionReady && model.reconnectBanner == nil,
-                onBack: { model.showWelcome() }
+                onBack: { model.showWelcome() },
+                onDisconnect: model.disconnectFromCompanion,
+                onReconnect: model.reconnectToCompanion
             )
             if let banner = model.reconnectBanner {
                 HStack(spacing: 8) {
@@ -25,7 +27,11 @@ struct AgentSessionView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(theme.textSecondary)
                     Spacer(minLength: 0)
-                    if banner.contains("Setup") {
+                    if model.isManuallyDisconnected {
+                        Button("Reconnect", action: model.reconnectToCompanion)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(theme.textPrimary)
+                    } else if banner.contains("Setup") {
                         Button("Setup") { model.showOnboarding() }
                             .font(.caption.monospaced())
                             .foregroundStyle(theme.textPrimary)

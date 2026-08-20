@@ -30,6 +30,7 @@ from companion_ext import (  # noqa: E402
     CONFIG_GET_METHOD,
     CONFIG_SET_METHOD,
     MERMAID_RENDER_METHOD,
+    SIMULATOR_INFO_METHOD,
     handle_companion_rpc,
 )
 from ios_build_pipeline import (  # noqa: E402
@@ -63,10 +64,17 @@ def handle_simulator_run_rpc(
     msg: dict[str, Any],
     ios_pipeline: IOSBuildPipeline | None,
 ) -> bytes | None:
-    """Queue one companion-owned build without sending a prompt to the agent."""
-    if msg.get("method") != SIMULATOR_RUN_METHOD:
+    """Handle build commands against this connection's project pipeline."""
+    method = msg.get("method")
+    if method not in (SIMULATOR_RUN_METHOD, SIMULATOR_INFO_METHOD):
         return None
     req_id = msg.get("id")
+    if method == SIMULATOR_INFO_METHOD and ios_pipeline is not None:
+        return (json.dumps({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": ios_pipeline.simulator_info(),
+        }) + "\n").encode("utf-8")
     if ios_pipeline is None or not ios_pipeline.enabled:
         body: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -125,6 +133,20 @@ def find_agent(
         if npx:
             return [npx, "--yes", "@agentclientprotocol/claude-agent-acp"]
         return None
+
+    if provider == "opencode":
+        executable = shutil.which("opencode")
+        if not executable:
+            return None
+        argv = [executable, "acp"]
+        if not model:
+            return argv
+        config = json.dumps({"model": model}, separators=(",", ":"))
+        return [
+            "/usr/bin/env",
+            f"OPENCODE_CONFIG_CONTENT={config}",
+            *argv,
+        ]
 
     if provider == "local":
         executable = shutil.which("opencode")
@@ -234,38 +256,13 @@ def enrich_session_list_response(line: bytes, request_ids: set[Any]) -> bytes:
     sessions = payload.get("sessions") if isinstance(payload, dict) else None
     if not isinstance(sessions, list):
         return line
-    root = projects_root().expanduser().resolve()
+    # Resume Project is a directory picker, not provider conversation history.
+    # Always expose stable synthetic IDs so selecting a project is normalized to
+    # session/new in that directory and begins with a clean agent conversation.
     filtered_sessions: list[dict[str, Any]] = []
-    session_paths: set[Path] = set()
-    for session in sessions:
-        if not isinstance(session, dict):
-            continue
-        cwd = session.get("cwd")
-        if not isinstance(cwd, str) or not cwd:
-            continue
-        path = Path(cwd).expanduser().resolve()
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            continue
-        if not relative.parts or not path.is_dir():
-            continue
-        session_paths.add(path)
-        project_name = project_name_for_workspace(cwd)
-        if project_name:
-            session["projectName"] = project_name
-        filtered_sessions.append(session)
     payload["sessions"] = filtered_sessions
     for project in registered_projects():
         path = Path(project["path"]).resolve()
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            continue
-        if not relative.parts:
-            continue
-        if path in session_paths:
-            continue
         filtered_sessions.append({
             "sessionId": session_id_for_project(path),
             "cwd": str(path),
@@ -913,9 +910,9 @@ def main() -> int:
     parser.add_argument("--real", action="store_true", help="Require the selected real agent")
     parser.add_argument(
         "--agent",
-        choices=("codex", "claude", "local"),
+        choices=("codex", "claude", "opencode", "local"),
         default=os.environ.get("ACP_AGENT", "codex"),
-        help="ACP agent provider (default: codex)",
+        help="ACP agent provider: codex, claude, opencode, or local (default: codex)",
     )
     parser.add_argument("--model", default=os.environ.get("ACP_MODEL"))
     parser.add_argument(
