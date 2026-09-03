@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct GrokApp: App {
     @StateObject private var model = AppModel()
+    @State private var wasBackgrounded = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -18,8 +19,16 @@ struct GrokApp: App {
                 .background(model.theme.bgBase.ignoresSafeArea())
                 .preferredColorScheme(model.themeName.lowercased().contains("day") ? .light : .dark)
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active {
-                        model.reconnectTransportIfNeeded()
+                    switch phase {
+                    case .background:
+                        wasBackgrounded = true
+                    case .active:
+                        model.reconnectTransportIfNeeded(reloadSession: wasBackgrounded)
+                        wasBackgrounded = false
+                    case .inactive:
+                        break
+                    @unknown default:
+                        break
                     }
                 }
         }

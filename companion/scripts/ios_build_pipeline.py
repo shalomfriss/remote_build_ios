@@ -27,7 +27,9 @@ IOS_BUILD_POLICY = (
     f"{IOS_POLICY_MARKER} Build only an iOS app for this request. Work in the existing "
     "Xcode project or create one when needed. Use native iOS technologies, keep the "
     "project buildable for an iOS Simulator, and finish only after the implementation "
-    "is complete. The companion will compile, install, launch, and serve the app."
+    "is complete. Before finishing, run xcodebuild for an iOS Simulator and fix every "
+    "compile error until the build succeeds. The companion will then compile, install, "
+    "launch, and serve the app."
 )
 
 

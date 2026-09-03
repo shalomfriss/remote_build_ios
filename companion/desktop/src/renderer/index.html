@@ -3,115 +3,139 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Run and connect to your Build Buddy iOS development companion.">
     <title>Build Buddy Companion</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <div class="app-shell">
       <header class="app-header">
-        <div class="brand">
+        <button class="brand" type="button" data-view-target="control" aria-label="Build Buddy control">
           <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-          <div>
-            <h1>Build Buddy</h1>
-            <p>Companion control center</p>
-          </div>
-        </div>
-        <div id="status" class="status stopped" aria-live="polite"><span></span>Stopped</div>
+          <span class="brand-type"><strong>Build Buddy</strong><small>Companion</small></span>
+        </button>
+        <nav class="app-nav" aria-label="Main navigation">
+          <button class="nav-button active" type="button" data-view-target="control" aria-current="page">Control</button>
+          <button class="nav-button" type="button" data-view-target="settings">Settings</button>
+        </nav>
+        <div id="status" class="status stopped" aria-live="polite"><span></span>Offline</div>
       </header>
 
-      <main>
-        <section class="command-deck panel">
-          <div class="command-copy">
-            <div class="eyebrow">iPhone development bridge</div>
-            <h2 id="headline">Ready to start</h2>
-            <p id="summary">Start the companion to boot and stream your project simulator.</p>
-          </div>
-          <div class="actions">
-            <button id="start">Start Companion</button>
-            <button id="stop" class="secondary" disabled>Stop</button>
-          </div>
-        </section>
-
-        <section id="port-conflicts" class="panel port-conflicts" hidden>
-          <div>
-            <div class="alert-label">Port conflict</div>
-            <h3>Required ports are already in use</h3>
-            <p>Review the listening processes below, then stop them and retry the companion.</p>
-            <ul id="port-conflict-list"></ul>
-          </div>
-          <button id="kill-ports" class="danger">Kill processes and retry</button>
-        </section>
-
-        <section id="connection" class="panel connection-strip" aria-label="Connection details">
-          <article class="metric pin-metric">
-            <div class="metric-heading"><span>01</span><label>Pairing PIN</label></div>
-            <strong id="pin">· · · · · ·</strong>
-            <button class="text-button" data-copy="pin">Copy PIN</button>
-          </article>
-          <article class="metric endpoint-metric">
-            <div class="metric-heading"><span>02</span><label>Remote endpoint</label></div>
-            <strong id="remote">Not connected</strong>
-            <button class="text-button" data-copy="remote">Copy endpoint</button>
-          </article>
-          <article class="metric simulator-metric">
-            <div class="metric-heading"><span>03</span><label>Simulator</label></div>
-            <strong id="simulator">Not running</strong>
-            <button id="open-simulator" class="text-button" disabled>Open stream</button>
-          </article>
-        </section>
-
-        <section class="workspace-grid">
-          <form id="settings" class="panel settings-panel">
-            <div class="section-title">
-              <div>
-                <span class="section-index">01</span>
-                <h3>Runtime configuration</h3>
-                <p>Changes are saved when the companion starts.</p>
+      <main id="main-content">
+        <section id="control-view" class="view active" aria-labelledby="hero-brand">
+          <section class="hero">
+            <div class="atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="hero-copy">
+              <p class="kicker">iPhone development bridge</p>
+              <h1 id="hero-brand">Build<br>Buddy</h1>
+              <div class="hero-message">
+                <h2 id="headline">Ready when you are.</h2>
+                <p id="summary">Start the companion to bring your project, simulator, and coding agent onto your phone.</p>
+              </div>
+              <div class="actions">
+                <button id="start" class="primary">Start companion <span aria-hidden="true">↗</span></button>
+                <button id="stop" class="secondary" disabled>Stop</button>
               </div>
             </div>
 
-            <section class="config-group" aria-labelledby="project-settings-title">
-              <h4 id="project-settings-title">Project source</h4>
-              <label>Workspace<div class="field-row"><input id="workspace" required><button type="button" class="browse" data-field="workspace">Choose</button></div></label>
-              <label>Projects folder<div class="field-row"><input id="projectsRoot" required><button type="button" class="browse" data-field="projectsRoot">Choose</button></div></label>
-            </section>
-
-            <section class="config-group" aria-labelledby="engine-settings-title">
-              <h4 id="engine-settings-title">Build engine</h4>
-              <div class="two-up">
-                <label>Coding harness<select id="codingHarness" aria-describedby="coding-harness-help"><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option></select><small id="coding-harness-help" class="field-help">Used for new ACP sessions.</small></label>
-                <label>Model<input id="model" aria-describedby="model-help" placeholder="default or provider/model"><small id="model-help" class="field-help">Uses the selected harness default.</small></label>
+            <div class="bridge-visual" aria-label="Connection between this Mac and your iPhone">
+              <div class="signal-lines" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="device mac-device">
+                <div class="device-screen"><span class="code-line long"></span><span class="code-line"></span><span class="code-line short"></span><b></b></div>
+                <div class="mac-base"></div>
+                <small>This Mac</small>
               </div>
-              <label>Simulator device<input id="simulatorDevice" aria-describedby="simulator-help" placeholder="default, name, or UDID"><small id="simulator-help" class="field-help">Default uses a booted iPhone, then the first available iPhone.</small></label>
-            </section>
-
-            <section class="config-group" aria-labelledby="network-settings-title">
-              <h4 id="network-settings-title">Network</h4>
-              <div class="three-up">
-                <label>ACP port<input id="acpPort" inputmode="numeric"></label>
-                <label>Stream port<input id="simulatorPort" inputmode="numeric"></label>
-                <label>Gateway port<input id="gatewayPort" inputmode="numeric"></label>
+              <div class="bridge-node" aria-hidden="true"><span></span></div>
+              <div class="device phone-device">
+                <div class="phone-screen"><span>BB</span><i></i><i></i><i></i></div>
+                <small>Your iPhone</small>
               </div>
-              <label>Reserved ngrok URL<input id="ngrokUrl" placeholder="Optional"></label>
-            </section>
-
-            <div class="toggles">
-              <label class="toggle"><input id="ngrok" type="checkbox"><span aria-hidden="true"></span><b>Allow cellular access with ngrok</b></label>
-              <label class="toggle"><input id="startSimulator" type="checkbox"><span aria-hidden="true"></span><b>Boot and stream the project simulator</b></label>
             </div>
-          </form>
-
-          <section class="panel logs-panel">
-            <div class="section-title logs-title">
-              <div>
-                <span class="section-index">02</span>
-                <h3>Live output</h3>
-                <p id="log-count">No messages yet</p>
-              </div>
-              <button id="clear" class="text-button">Clear output</button>
-            </div>
-            <div id="logs" class="logs" aria-live="polite"><div class="empty"><span>Waiting for companion output</span><small>Build and runtime events will stream here.</small></div></div>
           </section>
+
+          <section id="port-conflicts" class="port-conflicts" hidden>
+            <div>
+              <p class="alert-label">Port conflict</p>
+              <h3>Another process is in the way.</h3>
+              <p>Stop the listeners below, then Build Buddy will retry automatically.</p>
+              <ul id="port-conflict-list"></ul>
+            </div>
+            <button id="kill-ports" class="danger">Stop processes and retry</button>
+          </section>
+
+          <section id="connection" class="connection-details" aria-label="Connection details">
+            <article class="connection-primary">
+              <p id="endpoint-label">Local endpoint</p>
+              <strong id="remote">Not connected</strong>
+              <button class="text-button" data-copy="remote">Copy endpoint</button>
+            </article>
+            <article>
+              <p>Pairing PIN</p>
+              <strong id="pin">· · · · · ·</strong>
+              <button class="text-button" data-copy="pin">Copy PIN</button>
+            </article>
+            <article>
+              <p>Simulator</p>
+              <strong id="simulator">Not running</strong>
+              <button id="open-simulator" class="text-button" disabled>Open stream</button>
+            </article>
+          </section>
+
+          <section class="output-section">
+            <header>
+              <div><p class="kicker">Process output</p><h2>Live activity</h2></div>
+              <div class="output-actions"><span id="log-count">No messages yet</span><button id="clear" class="text-button">Clear</button></div>
+            </header>
+            <div id="logs" class="logs" aria-live="polite"><div class="empty"><span>Quiet for now</span><small>Build and runtime events will appear here.</small></div></div>
+          </section>
+        </section>
+
+        <section id="settings-view" class="view settings-view" aria-labelledby="settings-title" hidden>
+          <header class="settings-heading">
+            <button class="back-button" type="button" data-view-target="control" aria-label="Back to control">←</button>
+            <div><p class="kicker">Companion preferences</p><h1 id="settings-title">Settings</h1><p>Choose how Build Buddy starts and where it connects.</p></div>
+          </header>
+
+          <form id="settings">
+            <section class="settings-section" aria-labelledby="project-settings-title">
+              <div><span>01</span><h2 id="project-settings-title">Project source</h2><p>Set the active workspace and where Build Buddy can find projects.</p></div>
+              <div class="fields">
+                <label>Workspace<div class="field-row"><input id="workspace" required><button type="button" class="browse" data-field="workspace">Choose</button></div></label>
+                <label>Projects folder<div class="field-row"><input id="projectsRoot" required><button type="button" class="browse" data-field="projectsRoot">Choose</button></div></label>
+              </div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="engine-settings-title">
+              <div><span>02</span><h2 id="engine-settings-title">Build engine</h2><p>Pick the coding harness and simulator used for new sessions.</p></div>
+              <div class="fields">
+                <div class="two-up">
+                  <label>Coding harness<select id="codingHarness" aria-describedby="coding-harness-help"><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option></select><small id="coding-harness-help">Used for new ACP sessions.</small></label>
+                  <label>Model<input id="model" aria-describedby="model-help" placeholder="default or provider/model"><small id="model-help">Uses the selected harness default.</small></label>
+                </div>
+                <label>Simulator device<input id="simulatorDevice" aria-describedby="simulator-help" placeholder="default, name, or UDID"><small id="simulator-help">Default reuses a booted iPhone, then selects the first available device.</small></label>
+                <label class="toggle"><input id="startSimulator" type="checkbox"><span aria-hidden="true"></span><b><strong>Start simulator</strong><small>Boot and stream the project simulator with the companion.</small></b></label>
+              </div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="network-settings-title">
+              <div><span>03</span><h2 id="network-settings-title">Connection</h2><p>Use the local network by default, or enable ngrok for cellular access.</p></div>
+              <div class="fields">
+                <label class="toggle featured-toggle"><input id="ngrok" type="checkbox"><span aria-hidden="true"></span><b><strong>Enable ngrok</strong><small>Creates a public endpoint. Leave off to connect over your local network.</small></b></label>
+                <div id="ngrok-options" class="conditional-field"><label>Reserved ngrok URL<input id="ngrokUrl" placeholder="Optional"></label></div>
+                <div class="three-up">
+                  <label>ACP port<input id="acpPort" inputmode="numeric"></label>
+                  <label>Stream port<input id="simulatorPort" inputmode="numeric"></label>
+                  <label>Gateway port<input id="gatewayPort" inputmode="numeric"></label>
+                </div>
+              </div>
+            </section>
+
+            <footer class="settings-footer">
+              <p id="settings-state">Changes apply the next time the companion starts.</p>
+              <button id="save-settings" class="primary" type="submit">Save settings</button>
+            </footer>
+          </form>
         </section>
       </main>
     </div>

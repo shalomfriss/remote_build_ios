@@ -114,6 +114,7 @@ def test_ios_policy_is_added_once() -> None:
     prompt = message["params"]["prompt"]
     assert len(prompt) == 2
     assert PIPELINE.IOS_POLICY_MARKER in prompt[-1]["text"]
+    assert "until the build succeeds" in prompt[-1]["text"]
 
 
 def test_only_end_turn_triggers_build() -> None:

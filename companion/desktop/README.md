@@ -22,7 +22,9 @@ npm run dist
 
 The DMG and ZIP are written to `companion/desktop/dist`. Packaged builds include
 the companion scripts and required upstream runtime resources. Xcode, the chosen
-ACP agent, Node/npm, and ngrok (when enabled) remain host prerequisites.
+ACP agent, and Node/npm remain host prerequisites. ngrok is optional and only
+required when cellular access is enabled in Settings. With ngrok disabled, the
+control view displays the local network endpoint.
 
 ## Coding harnesses
 

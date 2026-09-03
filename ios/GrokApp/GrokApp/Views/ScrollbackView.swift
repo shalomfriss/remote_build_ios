@@ -6,12 +6,16 @@ import SwiftUI
 /// Scrollback aligned with upstream `xai-grok-pager` block semantics only.
 /// Strings/modes from `scrollback/blocks/thinking.rs`, `user.rs`, `agent.rs`, `tool/*`.
 struct ScrollbackView: View {
+    private static let bottomID = "scrollback-bottom"
+
     let entries: [ScrollbackEntry]
     let theme: GrokTheme
     var showTimestamps: Bool = AppSettings.showTimestamps
     var onToggleFold: ((UUID) -> Void)?
     var onOpenMermaid: ((String) async -> Data?)?
     var onDismissKeyboard: (() -> Void)?
+
+    @State private var followsStreamingOutput = true
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -25,8 +29,12 @@ struct ScrollbackView: View {
                             onToggleFold: onToggleFold,
                             onOpenMermaid: onOpenMermaid
                         )
+                            .equatable()
                             .id(entry.id)
                     }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomID)
                 }
                 .padding(.vertical, 4)
             }
@@ -34,21 +42,45 @@ struct ScrollbackView: View {
             .simultaneousGesture(
                 TapGesture().onEnded { onDismissKeyboard?() }
             )
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 4).onChanged { _ in
+                    followsStreamingOutput = false
+                }
+            )
             .onChange(of: entries.count) { _, _ in
-                if let last = entries.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                if entries.last?.kind == .user {
+                    followsStreamingOutput = true
+                }
+                if followsStreamingOutput {
+                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                }
+            }
+            .onChange(of: streamingTextCount) { _, _ in
+                if followsStreamingOutput {
+                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
                 }
             }
         }
     }
+
+    private var streamingTextCount: Int {
+        guard let last = entries.last, last.isStreaming else { return 0 }
+        return last.text.count
+    }
 }
 
-struct ScrollbackRow: View {
+struct ScrollbackRow: View, Equatable {
     let entry: ScrollbackEntry
     let theme: GrokTheme
     var showTimestamps: Bool = true
     var onToggleFold: ((UUID) -> Void)?
     var onOpenMermaid: ((String) async -> Data?)?
+
+    static func == (lhs: ScrollbackRow, rhs: ScrollbackRow) -> Bool {
+        lhs.entry == rhs.entry
+            && lhs.theme == rhs.theme
+            && lhs.showTimestamps == rhs.showTimestamps
+    }
 
     var body: some View {
         let row = HStack(alignment: .top, spacing: 0) {
@@ -169,20 +201,26 @@ struct ScrollbackRow: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(theme.gray)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(MarkdownLite.segments(entry.text).enumerated()), id: \.offset) { _, seg in
-                        switch seg {
-                        case .markdown(let text):
-                            Text(MarkdownLite.attributed(text))
-                                .font(agentFont)
-                                .foregroundStyle(theme.textPrimary)
-                                .textSelection(.enabled)
-                        case .mermaid(let source):
-                            MermaidBlockView(
-                                source: source,
-                                theme: theme,
-                                onOpenImage: onOpenMermaid
-                            )
+                if entry.isStreaming {
+                    Text(entry.text)
+                        .font(agentFont)
+                        .foregroundStyle(theme.textPrimary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(MarkdownLite.segments(entry.text).enumerated()), id: \.offset) { _, seg in
+                            switch seg {
+                            case .markdown(let text):
+                                Text(MarkdownLite.attributed(text))
+                                    .font(agentFont)
+                                    .foregroundStyle(theme.textPrimary)
+                                    .textSelection(.enabled)
+                            case .mermaid(let source):
+                                MermaidBlockView(
+                                    source: source,
+                                    theme: theme,
+                                    onOpenImage: onOpenMermaid
+                                )
+                            }
                         }
                     }
                 }

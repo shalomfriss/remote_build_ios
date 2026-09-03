@@ -65,6 +65,7 @@ final class ACPClient: ObservableObject {
     private var replayedChunkKind: ScrollbackKind?
 
     private(set) var chrome = SessionChrome()
+    private var lastPublishedChrome: SessionChrome?
     private var rosterById: [String: RosterSessionEntry] = [:]
 
     func setPreferredEndpoint(_ endpoint: NWEndpoint?) {
@@ -344,10 +345,9 @@ final class ACPClient: ObservableObject {
     }
 
     private func setTurnActivity(_ activity: String?) {
-        if activity != lastTurnActivity {
-            chrome.phaseStartedAt = Date()
-            lastTurnActivity = activity
-        }
+        guard activity != lastTurnActivity else { return }
+        chrome.phaseStartedAt = Date.now
+        lastTurnActivity = activity
         chrome.turnActivity = activity
         publishChrome()
     }
@@ -890,6 +890,8 @@ final class ACPClient: ObservableObject {
 
     private func publishChrome() {
         chrome.alwaysApprove = alwaysApprove
+        guard chrome != lastPublishedChrome else { return }
+        lastPublishedChrome = chrome
         onChromeChanged?(chrome)
     }
 
@@ -1038,7 +1040,10 @@ final class ACPClient: ObservableObject {
             Task { @MainActor [weak self, weak activeConnection] in
                 guard let self, let activeConnection else { return }
                 guard self.connection === activeConnection else { return }
-                if let data, !data.isEmpty { self.receiveBuffer.append(data); self.processBuffer() }
+                if let data, !data.isEmpty {
+                    self.receiveBuffer.append(data)
+                    await self.processBuffer()
+                }
                 if let error {
                     if self.sessionReady {
                         self.handleTransportDrop()
@@ -1060,19 +1065,30 @@ final class ACPClient: ObservableObject {
         }
     }
 
-    private func processBuffer() {
-        while let line = extractLine() {
-            handleLine(line)
-        }
-    }
+    private func processBuffer() async {
+        guard let finalNewline = receiveBuffer.lastIndex(of: 0x0A) else { return }
 
-    private func extractLine() -> String? {
-        guard let range = receiveBuffer.firstRange(of: Data([0x0A])) else { return nil }
-        let lineData = receiveBuffer.subdata(in: receiveBuffer.startIndex..<range.lowerBound)
-        receiveBuffer.removeSubrange(receiveBuffer.startIndex...range.lowerBound)
-        return String(data: lineData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfEmpty
+        // Detach every complete frame in one operation. Removing one line at a
+        // time repeatedly shifted the remainder of the Data buffer and became
+        // quadratic during bursty command/build output.
+        let completed = receiveBuffer[..<finalNewline]
+        receiveBuffer.removeSubrange(receiveBuffer.startIndex...finalNewline)
+
+        var handledLineCount = 0
+        for bytes in completed.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            let line = String(decoding: bytes, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            handleLine(line)
+            handledLineCount += 1
+
+            // ACPClient is main-actor isolated because it owns observable UI
+            // state. Yield between bounded batches so touch/scroll events and
+            // SwiftUI rendering stay responsive during a large receive burst.
+            if handledLineCount.isMultiple(of: 32) {
+                await Task.yield()
+            }
+        }
     }
 
     private func handleLine(_ line: String) {
@@ -1274,18 +1290,21 @@ final class ACPClient: ObservableObject {
     }
 
     private func applyNotificationMeta(_ meta: [String: ACPProtocol.JSONValue]?) {
-        guard let meta else { return }
-        if let used = meta["totalTokens"]?.intValue {
-            chrome.contextUsed = used
-            if isRunning {
-                if let baseline = turnTokenBaseline {
-                    chrome.turnTokensUsed = max(0, used - baseline)
-                } else {
-                    chrome.turnTokensUsed = used
-                }
+        guard let meta, let used = meta["totalTokens"]?.intValue else { return }
+        let turnTokensUsed: Int? = if isRunning {
+            if let baseline = turnTokenBaseline {
+                max(0, used - baseline)
+            } else {
+                used
             }
-            publishChrome()
+        } else {
+            chrome.turnTokensUsed
         }
+
+        guard chrome.contextUsed != used || chrome.turnTokensUsed != turnTokensUsed else { return }
+        chrome.contextUsed = used
+        chrome.turnTokensUsed = turnTokensUsed
+        publishChrome()
     }
 
     private func applyGoalUpdate(_ update: [String: ACPProtocol.JSONValue]) {

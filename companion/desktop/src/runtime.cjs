@@ -13,7 +13,7 @@ function defaultSettings(repoRoot = "") {
     simulatorPort: "3200",
     gatewayPort: "7392",
     simulatorDevice: "default",
-    ngrok: true,
+    ngrok: false,
     ngrokUrl: "",
     startSimulator: true,
   };
@@ -44,7 +44,7 @@ function buildLaunchSpec(settings, root, inheritedEnv = process.env) {
   const simulatorDevice = optionalOverride(settings.simulatorDevice);
   const args = [script];
   if (settings.ngrok) args.push("--ngrok");
-  if (settings.ngrokUrl) args.push("--ngrok-url", settings.ngrokUrl);
+  if (settings.ngrok && settings.ngrokUrl) args.push("--ngrok-url", settings.ngrokUrl);
   if (!settings.startSimulator) args.push("--no-simulator");
   args.push("--projects-root", settings.projectsRoot, "--port", settings.acpPort);
 

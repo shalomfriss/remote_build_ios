@@ -17,9 +17,15 @@ final class AppModel: ObservableObject {
             chrome.alwaysApprove = alwaysApprove
         }
     }
-    @Published var themeName: String = "GrokNight"
+    @Published var themeName: String = "GrokNight" {
+        didSet {
+            guard themeName != oldValue else { return }
+            theme = GrokTheme.load(named: themeName)
+        }
+    }
     @Published var sessionTitle: String = "loading..."
     @Published var chrome = SessionChrome()
+    @Published private(set) var theme = GrokTheme.load(named: "GrokNight")
     @Published var permissionRequest: PermissionRequest?
     @Published var isPromptFocused: Bool = false
     @Published var apiKeyDraft: String = ""
@@ -69,13 +75,19 @@ final class AppModel: ObservableObject {
     private var projectClients: [String: ACPClient] = [:]
     private var projectNames: [String: String] = [:]
     private var projectCwds: [String: String] = [:]
+    private var persistedWelcomeCwd: String?
+    private var persistedWelcomeGitBranch: String?
+    private var persistedWelcomeIsWorktree: Bool?
     private var simulatorStatusByProject: [String: String] = [:]
     private var simulatorErrorByProject: [String: String] = [:]
     private var simulatorOutputByProject: [String: String] = [:]
     private var simulatorGenerationByProject: [String: Int] = [:]
     private var simulatorPendingProjects: Set<String> = []
+    private var simulatorRepairAttemptsByProject: [String: Int] = [:]
 
-    var theme: GrokTheme { GrokTheme.load(named: themeName) }
+    private static let maximumSimulatorRepairAttempts = 3
+    private static let maximumSimulatorRepairLogLength = 12_000
+
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
 
     /// Provider-neutral ACP bridge endpoint and pairing PIN.
@@ -186,12 +198,21 @@ final class AppModel: ObservableObject {
             guard let self, let client, self.acp === client else { return }
             var c = chrome
             c.alwaysApprove = self.alwaysApprove
-            self.chrome = c
-            CompanionConfig.persistWelcomeLocation(
-                cwd: c.cwd,
-                gitBranch: c.gitBranch,
-                isWorktree: c.isWorktree
-            )
+            if self.chrome != c {
+                self.chrome = c
+            }
+            if self.persistedWelcomeCwd != c.cwd
+                || self.persistedWelcomeGitBranch != c.gitBranch
+                || self.persistedWelcomeIsWorktree != c.isWorktree {
+                CompanionConfig.persistWelcomeLocation(
+                    cwd: c.cwd,
+                    gitBranch: c.gitBranch,
+                    isWorktree: c.isWorktree
+                )
+                self.persistedWelcomeCwd = c.cwd
+                self.persistedWelcomeGitBranch = c.gitBranch
+                self.persistedWelcomeIsWorktree = c.isWorktree
+            }
             if c.sessionId != nil, self.sessionTitle == "loading..." || self.sessionTitle.hasPrefix("session ") {
                 self.sessionTitle = c.loadingTitle
             }
@@ -436,23 +457,35 @@ final class AppModel: ObservableObject {
     }
 
     /// Reconnect after background / Wi‑Fi blip — preserves session when possible.
-    func reconnectTransportIfNeeded() {
+    /// When `reloadSession` is true, replace a socket that may have been suspended by
+    /// iOS and reload the server-side session so updates received while backgrounded
+    /// are reflected immediately.
+    func reconnectTransportIfNeeded(reloadSession: Bool = false) {
         guard !isManuallyDisconnected else { return }
         guard canStartSession else { return }
         guard screen == .agent || screen == .dashboard else { return }
-        guard !acp.sessionReady else {
+        let resumeId = manuallyDisconnectedSessionID ?? acp.sessionId
+        guard !acp.sessionReady || (reloadSession && resumeId?.isEmpty == false) else {
             reconnectBanner = nil
             Task { simulatorURL = await acp.fetchSimulatorURL() }
             return
         }
-        guard !isReconnecting else { return }
+        if isReconnecting {
+            guard reloadSession else { return }
+            // A reconnect started before suspension cannot prove it replayed all
+            // server updates. Replace it with the foreground session reload.
+            reconnectTask?.cancel()
+        }
         isReconnecting = true
         reconnectBanner = "Reconnecting…"
-        let resumeId = manuallyDisconnectedSessionID ?? acp.sessionId
         reconnectTask?.cancel()
         let reconnectAttemptID = UUID()
         self.reconnectAttemptID = reconnectAttemptID
-        acp.reconnect(preserveSessionId: resumeId)
+        acp.reconnect(
+            preserveSessionId: resumeId,
+            cwd: chrome.cwd,
+            showLatestMessage: reloadSession
+        )
         reconnectTask = Task { @MainActor in
             defer {
                 if self.reconnectAttemptID == reconnectAttemptID {
@@ -478,7 +511,11 @@ final class AppModel: ObservableObject {
                         triedRemoteFallback = true
                         self.clearBonjourPreference()
                         self.reconnectBanner = "Switching to remote connection…"
-                        self.acp.reconnect(preserveSessionId: resumeId, cwd: self.chrome.cwd)
+                        self.acp.reconnect(
+                            preserveSessionId: resumeId,
+                            cwd: self.chrome.cwd,
+                            showLatestMessage: reloadSession
+                        )
                         deadline = Date.now.addingTimeInterval(20)
                         continue
                     }
@@ -1008,6 +1045,7 @@ final class AppModel: ObservableObject {
         isSimulatorRunPending
             || simulatorBuildStatus == "queued"
             || simulatorBuildStatus == "building"
+            || simulatorBuildStatus == "repairing"
     }
 
     func runCurrentProject() {
@@ -1023,13 +1061,14 @@ final class AppModel: ObservableObject {
         simulatorErrorByProject[projectID] = nil
         simulatorOutputByProject[projectID] = ""
         simulatorGenerationByProject[projectID] = nil
+        simulatorRepairAttemptsByProject[projectID] = 0
         client.tracker.appendSystem("[ios-build] Build queued")
         Task { @MainActor [weak self] in
             guard let self else { return }
             let minimumIndicatorEnd = ContinuousClock.now.advanced(by: .seconds(1))
             do {
                 try await client.runSimulatorApp()
-                await self.waitForSimulatorBuild(client: client, projectID: projectID)
+                await self.ensureSimulatorBuildSucceeds(client: client, projectID: projectID)
             } catch {
                 self.simulatorStatusByProject[projectID] = "failed"
                 self.simulatorErrorByProject[projectID] = error.localizedDescription
@@ -1050,29 +1089,130 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func waitForSimulatorBuild(client: ACPClient, projectID: String) async {
+    private func ensureSimulatorBuildSucceeds(client: ACPClient, projectID: String) async {
+        var generationToReplace: Int?
+
+        while !Task.isCancelled {
+            guard let info = await waitForSimulatorBuild(
+                client: client,
+                projectID: projectID,
+                afterGeneration: generationToReplace
+            ) else {
+                return
+            }
+            guard info.status == "failed" else {
+                simulatorRepairAttemptsByProject[projectID] = nil
+                return
+            }
+
+            let repairAttempts = simulatorRepairAttemptsByProject[projectID] ?? 0
+            guard Self.isSimulatorCompileFailure(info),
+                  repairAttempts < Self.maximumSimulatorRepairAttempts,
+                  let failedGeneration = info.generation else {
+                return
+            }
+
+            let nextAttempt = repairAttempts + 1
+            simulatorRepairAttemptsByProject[projectID] = nextAttempt
+            simulatorStatusByProject[projectID] = "repairing"
+            if activeProjectID == projectID || (activeProjectID == nil && projectID == "active-project"),
+               acp === client {
+                simulatorBuildStatus = "repairing"
+            }
+            client.tracker.appendSystem(
+                "[ios-build] Compile failed. Asking the agent to repair the project "
+                    + "(attempt \(nextAttempt)/\(Self.maximumSimulatorRepairAttempts))."
+            )
+            client.sendPrompt(Self.simulatorRepairPrompt(for: info))
+
+            guard await waitForAgentTurnToFinish(client) else {
+                setSimulatorFailure(
+                    "The automatic build repair timed out.",
+                    client: client,
+                    projectID: projectID
+                )
+                return
+            }
+            generationToReplace = failedGeneration
+        }
+    }
+
+    private func waitForAgentTurnToFinish(_ client: ACPClient) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(600))
+        while !Task.isCancelled, ContinuousClock.now < deadline {
+            if !client.isRunning {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return false
+    }
+
+    private func waitForSimulatorBuild(
+        client: ACPClient,
+        projectID: String,
+        afterGeneration: Int?
+    ) async -> SimulatorBuildInfo? {
         let deadline = ContinuousClock.now.advanced(by: .seconds(300))
         repeat {
             let info = await client.fetchSimulatorInfo()
             applySimulatorInfo(info, client: client, projectID: projectID)
-            if info.status == "ready" || info.status == "failed" {
-                return
+            let isNewGeneration: Bool
+            if let afterGeneration {
+                isNewGeneration = info.generation.map { $0 > afterGeneration } ?? false
+            } else {
+                isNewGeneration = true
+            }
+            if isNewGeneration, info.status == "ready" || info.status == "failed" {
+                return info
             }
             try? await Task.sleep(for: .milliseconds(500))
         } while !Task.isCancelled && ContinuousClock.now < deadline
 
         let lastStatus = simulatorStatusByProject[projectID]
-        guard lastStatus == "queued" || lastStatus == "building" else {
-            return
+        guard lastStatus == "queued" || lastStatus == "building" || lastStatus == "repairing" else {
+            return nil
         }
         let timeoutError = "The simulator build timed out. Check the companion output."
+        setSimulatorFailure(timeoutError, client: client, projectID: projectID)
+        return nil
+    }
+
+    private func setSimulatorFailure(
+        _ error: String,
+        client: ACPClient,
+        projectID: String
+    ) {
         simulatorStatusByProject[projectID] = "failed"
-        simulatorErrorByProject[projectID] = timeoutError
-        if activeProjectID == projectID, acp === client {
+        simulatorErrorByProject[projectID] = error
+        if activeProjectID == projectID || (activeProjectID == nil && projectID == "active-project"),
+           acp === client {
             simulatorBuildStatus = "failed"
-            simulatorBuildError = timeoutError
+            simulatorBuildError = error
         }
-        client.tracker.appendError(timeoutError)
+        client.tracker.appendError(error)
+    }
+
+    static func isSimulatorCompileFailure(_ info: SimulatorBuildInfo) -> Bool {
+        guard info.status == "failed", let error = info.error else { return false }
+        return error.localizedCaseInsensitiveContains("iOS Simulator build failed")
+            || error.localizedCaseInsensitiveContains("exit 65")
+    }
+
+    static func simulatorRepairPrompt(for info: SimulatorBuildInfo) -> String {
+        let output = String(info.output.suffix(maximumSimulatorRepairLogLength))
+        let diagnostic = [info.error, output.isEmpty ? nil : output]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+        return """
+        The iOS Simulator build failed with xcodebuild exit 65. Diagnose the compiler
+        errors below, edit the existing project to fix them, and run xcodebuild for an
+        iOS Simulator. Keep fixing errors and do not finish the turn until the project
+        compiles successfully. Do not only explain the failure.
+
+        Build diagnostics:
+        \(diagnostic)
+        """
     }
 
     private func applySimulatorInfo(
@@ -1081,6 +1221,10 @@ final class AppModel: ObservableObject {
         projectID: String
     ) {
         let previousStatus = simulatorStatusByProject[projectID]
+        let previousGeneration = simulatorGenerationByProject[projectID]
+        let isStaleRepairFailure = previousStatus == "repairing"
+            && info.status == "failed"
+            && info.generation == previousGeneration
         if let generation = info.generation,
            simulatorGenerationByProject[projectID] != generation {
             simulatorGenerationByProject[projectID] = generation
@@ -1100,6 +1244,9 @@ final class AppModel: ObservableObject {
             client.tracker.appendSystem(displayOutput)
         }
 
+        if isStaleRepairFailure {
+            return
+        }
         simulatorStatusByProject[projectID] = info.status
         simulatorErrorByProject[projectID] = info.error
         if activeProjectID == projectID || (activeProjectID == nil && projectID == "active-project"),
@@ -1180,6 +1327,7 @@ final class AppModel: ObservableObject {
         simulatorOutputByProject.removeAll()
         simulatorGenerationByProject.removeAll()
         simulatorPendingProjects.removeAll()
+        simulatorRepairAttemptsByProject.removeAll()
         activeProjectID = nil
         acp.disconnect()
         acp = ACPClient()

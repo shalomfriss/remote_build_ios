@@ -12,55 +12,70 @@ struct RemoteSimulatorView: View {
     let onToggleFullScreen: () -> Void
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Group {
-                if let webError {
-                    ContentUnavailableView {
-                        Label("Simulator could not load", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(webError)
-                    } actions: {
-                        Button("Retry", action: retry)
-                    }
-                } else if let url = model.simulatorURL {
-                    SimulatorWebView(
-                        url: url,
-                        fillsViewport: isFullScreen,
-                        reloadID: reloadID,
-                        error: $webError
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ContentUnavailableView {
-                        Label("Simulator unavailable", systemImage: "iphone.slash")
-                    } description: {
-                        Text("Start agent-phone with simulator support, then reconnect.")
-                    } actions: {
-                        Button("Retry", action: retry)
+        GeometryReader { geometry in
+            ZStack(alignment: .top) {
+                Group {
+                    if let webError {
+                        ContentUnavailableView {
+                            Label("Simulator could not load", systemImage: "exclamationmark.triangle")
+                        } description: {
+                            Text(webError)
+                        } actions: {
+                            Button("Retry", action: retry)
+                        }
+                    } else if let url = model.simulatorURL {
+                        SimulatorWebView(
+                            url: url,
+                            fillsViewport: isFullScreen,
+                            reloadID: reloadID,
+                            error: $webError
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ContentUnavailableView {
+                            Label("Simulator unavailable", systemImage: "iphone.slash")
+                        } description: {
+                            Text("Start agent-phone with simulator support, then reconnect.")
+                        } actions: {
+                            Button("Retry", action: retry)
+                        }
                     }
                 }
-            }
 
-            if model.simulatorBuildStatus == "queued" || model.simulatorBuildStatus == "building" {
-                Label("Building and launching iOS app…", systemImage: "hammer")
-                    .padding()
-                    .background(.regularMaterial, in: Capsule())
-                    .padding()
-            } else if model.simulatorBuildStatus == "failed" {
-                Label(
-                    model.simulatorBuildError ?? "The iOS app could not be built.",
-                    systemImage: "exclamationmark.triangle"
-                )
-                .foregroundStyle(.red)
-                .padding()
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .padding()
-            }
+                if model.simulatorBuildStatus == "queued" || model.simulatorBuildStatus == "building" {
+                    Label("Building and launching iOS app…", systemImage: "hammer")
+                        .padding()
+                        .background(.regularMaterial, in: Capsule())
+                        .padding()
+                } else if model.simulatorBuildStatus == "failed" {
+                    VStack(spacing: 12) {
+                        Label(
+                            model.simulatorBuildError ?? "The iOS app could not be built.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.red)
 
-            if isFullScreen {
-                DraggableFullScreenExitButton(action: onToggleFullScreen)
+                        Button("Retry Build", systemImage: "arrow.clockwise") {
+                            model.runCurrentProject()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canRunCurrentProject)
+                    }
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding()
+                }
+
+                if isFullScreen {
+                    DraggableFullScreenExitButton(
+                        containerSize: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets,
+                        action: onToggleFullScreen
+                    )
                     .zIndex(2)
+                }
             }
+            .coordinateSpace(name: "simulator-full-screen")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(model.theme.bgBase)
@@ -82,75 +97,71 @@ private struct DraggableFullScreenExitButton: View {
     private static let buttonSize: CGFloat = 52
     private static let edgeInset: CGFloat = 12
 
+    let containerSize: CGSize
+    let safeAreaInsets: EdgeInsets
     let action: () -> Void
 
     @State private var position: CGPoint?
     @State private var dragOrigin: CGPoint?
 
     var body: some View {
-        GeometryReader { geometry in
-            Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: action)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-                .frame(width: Self.buttonSize, height: Self.buttonSize)
-                .contentShape(.circle)
-                .position(resolvedPosition(in: geometry))
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 5, coordinateSpace: .named("simulator-full-screen"))
-                        .onChanged { value in
-                            let origin = dragOrigin ?? resolvedPosition(in: geometry)
-                            dragOrigin = origin
-                            position = clamped(
-                                CGPoint(
-                                    x: origin.x + value.translation.width,
-                                    y: origin.y + value.translation.height
-                                ),
-                                in: geometry
+        Button("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left", action: action)
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .tint(.orange)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .frame(width: Self.buttonSize, height: Self.buttonSize)
+            .contentShape(.circle)
+            .position(resolvedPosition())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 5, coordinateSpace: .named("simulator-full-screen"))
+                    .onChanged { value in
+                        let origin = dragOrigin ?? resolvedPosition()
+                        dragOrigin = origin
+                        position = clamped(
+                            CGPoint(
+                                x: origin.x + value.translation.width,
+                                y: origin.y + value.translation.height
                             )
-                        }
-                        .onEnded { value in
-                            let origin = dragOrigin ?? resolvedPosition(in: geometry)
-                            position = clamped(
-                                CGPoint(
-                                    x: origin.x + value.translation.width,
-                                    y: origin.y + value.translation.height
-                                ),
-                                in: geometry
+                        )
+                    }
+                    .onEnded { value in
+                        let origin = dragOrigin ?? resolvedPosition()
+                        position = clamped(
+                            CGPoint(
+                                x: origin.x + value.translation.width,
+                                y: origin.y + value.translation.height
                             )
-                            dragOrigin = nil
-                        }
-                )
-                .accessibilityHint("Drag to move this button. Tap to leave full screen.")
-        }
-        .coordinateSpace(name: "simulator-full-screen")
+                        )
+                        dragOrigin = nil
+                    }
+            )
+            .accessibilityHint("Drag to move this button. Tap to leave full screen.")
     }
 
-    private func resolvedPosition(in geometry: GeometryProxy) -> CGPoint {
+    private func resolvedPosition() -> CGPoint {
         if let position {
-            return clamped(position, in: geometry)
+            return clamped(position)
         }
 
         let radius = Self.buttonSize / 2
         return clamped(
             CGPoint(
-                x: geometry.size.width - Self.edgeInset - radius,
-                y: geometry.size.height - geometry.safeAreaInsets.bottom - Self.edgeInset - radius
-            ),
-            in: geometry
+                x: containerSize.width - Self.edgeInset - radius,
+                y: containerSize.height - safeAreaInsets.bottom - Self.edgeInset - radius
+            )
         )
     }
 
-    private func clamped(_ point: CGPoint, in geometry: GeometryProxy) -> CGPoint {
+    private func clamped(_ point: CGPoint) -> CGPoint {
         let radius = Self.buttonSize / 2
         let minimumX = Self.edgeInset + radius
-        let maximumX = max(minimumX, geometry.size.width - Self.edgeInset - radius)
-        let minimumY = geometry.safeAreaInsets.top + Self.edgeInset + radius
+        let maximumX = max(minimumX, containerSize.width - Self.edgeInset - radius)
+        let minimumY = safeAreaInsets.top + Self.edgeInset + radius
         let maximumY = max(
             minimumY,
-            geometry.size.height - geometry.safeAreaInsets.bottom - Self.edgeInset - radius
+            containerSize.height - safeAreaInsets.bottom - Self.edgeInset - radius
         )
         return CGPoint(
             x: min(max(point.x, minimumX), maximumX),

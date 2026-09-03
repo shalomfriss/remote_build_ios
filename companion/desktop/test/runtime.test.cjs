@@ -17,6 +17,14 @@ test("builds the ngrok companion command and environment", () => {
   assert.match(spec.env.PATH, /\.opencode\/bin/);
 });
 
+test("keeps ngrok disabled by default and ignores a reserved URL when disabled", () => {
+  const defaults = defaultSettings("/workspace");
+  assert.equal(defaults.ngrok, false);
+  const spec = buildLaunchSpec({ ...defaults, ngrokUrl: "reserved.ngrok.app" }, "/runtime", { PATH: "/custom" });
+  assert.equal(spec.args.includes("--ngrok"), false);
+  assert.equal(spec.args.includes("--ngrok-url"), false);
+});
+
 test("selects each supported coding harness", () => {
   const settings = {
     workspace: "/tmp/workspace", projectsRoot: "/tmp/projects", model: "",

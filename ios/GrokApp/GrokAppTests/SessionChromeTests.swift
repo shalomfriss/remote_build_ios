@@ -6,6 +6,36 @@ import XCTest
 
 final class SessionChromeTests: XCTestCase {
     @MainActor
+    func testSimulatorExit65RequestsACompileRepair() {
+        let info = SimulatorBuildInfo(
+            url: nil,
+            status: "failed",
+            error: "iOS Simulator build failed (exit 65)",
+            output: "CompileSwift App.swift\nerror: cannot find Widget\n",
+            generation: 4
+        )
+
+        XCTAssertTrue(AppModel.isSimulatorCompileFailure(info))
+        let prompt = AppModel.simulatorRepairPrompt(for: info)
+        XCTAssertTrue(prompt.contains("do not finish the turn until the project"))
+        XCTAssertTrue(prompt.contains("compiles successfully"))
+        XCTAssertTrue(prompt.contains("error: cannot find Widget"))
+    }
+
+    @MainActor
+    func testSimulatorInstallFailureDoesNotRequestCompileRepair() {
+        let info = SimulatorBuildInfo(
+            url: nil,
+            status: "failed",
+            error: "Could not install the iOS app (exit 2)",
+            output: "simctl install failed",
+            generation: 5
+        )
+
+        XCTAssertFalse(AppModel.isSimulatorCompileFailure(info))
+    }
+
+    @MainActor
     func testLoadedHistoryKeepsOnlyLatestConversationMessage() {
         let tracker = ScrollbackTracker()
         tracker.appendUser("Earlier request")
@@ -20,6 +50,69 @@ final class SessionChromeTests: XCTestCase {
         XCTAssertEqual(tracker.entries.count, 1)
         XCTAssertEqual(tracker.entries.first?.kind, .assistant)
         XCTAssertEqual(tracker.entries.first?.text, "Most recent reply")
+    }
+
+    @MainActor
+    func testStreamingChunksPublishOneCoalescedUIUpdate() async {
+        let tracker = ScrollbackTracker()
+        var publishedChanges = 0
+        tracker.onChange = { _ in publishedChanges += 1 }
+
+        for _ in 0..<100 {
+            tracker.handleSessionUpdate([
+                "sessionUpdate": .string("agent_message_chunk"),
+                "content": .object(["text": .string("x")]),
+            ])
+        }
+
+        XCTAssertEqual(publishedChanges, 0)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(publishedChanges, 1)
+        XCTAssertEqual(tracker.entries.first?.text.count, 100)
+
+        tracker.finalizeStreaming()
+        XCTAssertEqual(publishedChanges, 2)
+        XCTAssertFalse(tracker.entries.first?.isStreaming ?? true)
+    }
+
+    @MainActor
+    func testFinalizingStreamingFlushesBufferedText() {
+        let tracker = ScrollbackTracker()
+
+        for _ in 0..<100 {
+            tracker.handleSessionUpdate([
+                "sessionUpdate": .string("agent_message_chunk"),
+                "content": .object(["text": .string("x")]),
+            ])
+        }
+
+        tracker.finalizeStreaming()
+
+        XCTAssertEqual(tracker.entries.first?.text.count, 100)
+        XCTAssertFalse(tracker.entries.first?.isStreaming ?? true)
+    }
+
+    @MainActor
+    func testToolTransitionPublishesOneCombinedUpdate() {
+        let tracker = ScrollbackTracker()
+        var publishedChanges = 0
+        tracker.onChange = { _ in publishedChanges += 1 }
+
+        tracker.handleSessionUpdate([
+            "sessionUpdate": .string("agent_message_chunk"),
+            "content": .object(["text": .string("Done")]),
+        ])
+        tracker.handleSessionUpdate([
+            "sessionUpdate": .string("tool_call"),
+            "toolCallId": .string("tool-1"),
+            "title": .string("Build"),
+            "status": .string("in_progress"),
+        ])
+
+        XCTAssertEqual(publishedChanges, 1)
+        XCTAssertEqual(tracker.entries.count, 2)
+        XCTAssertFalse(tracker.entries[0].isStreaming)
+        XCTAssertEqual(tracker.entries[1].kind, .tool)
     }
 
     func testFmtTokensMatchesUpstreamContextBar() {

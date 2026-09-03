@@ -10,15 +10,25 @@ final class ScrollbackTracker {
     private(set) var entries: [ScrollbackEntry] = []
     private var streamingAssistantID: UUID?
     private var streamingThoughtID: UUID?
+    private var pendingAssistantChunks: [String] = []
+    private var pendingThoughtChunks: [String] = []
     private var toolEntries: [String: UUID] = [:]
     private(set) var expandedVerbGroupIDs: Set<UUID> = []
+    private var pendingNotificationTask: Task<Void, Never>?
+
+    private static let streamingRefreshInterval = Duration.milliseconds(50)
+    private static let maximumToolDetailLength = 12_000
 
     var onChange: (([ScrollbackEntry]) -> Void)?
 
     func reset() {
+        pendingNotificationTask?.cancel()
+        pendingNotificationTask = nil
         entries.removeAll()
         streamingAssistantID = nil
         streamingThoughtID = nil
+        pendingAssistantChunks.removeAll(keepingCapacity: true)
+        pendingThoughtChunks.removeAll(keepingCapacity: true)
         toolEntries.removeAll()
         expandedVerbGroupIDs.removeAll()
         notify()
@@ -30,6 +40,8 @@ final class ScrollbackTracker {
     func showOnlyLatestMessage(kind: ScrollbackKind?, text: String?) {
         streamingAssistantID = nil
         streamingThoughtID = nil
+        pendingAssistantChunks.removeAll(keepingCapacity: true)
+        pendingThoughtChunks.removeAll(keepingCapacity: true)
         toolEntries.removeAll()
         expandedVerbGroupIDs.removeAll()
 
@@ -69,7 +81,7 @@ final class ScrollbackTracker {
                   let text = content["text"]?.stringValue, !text.isEmpty else { return }
             appendThoughtChunk(text)
         case "tool_call":
-            finalizeStreaming()
+            finalizeStreaming(notifying: false)
             let toolId = update["toolCallId"]?.stringValue ?? UUID().uuidString
             let title = update["title"]?.stringValue ?? update["kind"]?.stringValue ?? "Tool"
             let toolKind = update["kind"]?.stringValue
@@ -100,7 +112,9 @@ final class ScrollbackTracker {
                 e.toolStatus = status
                 if let title = update["title"]?.stringValue { e.toolTitle = title }
                 if let k = update["kind"]?.stringValue { e.toolKind = k }
-                if !output.isEmpty { e.toolDetail = (e.toolDetail ?? "") + "\n" + output }
+                if !output.isEmpty {
+                    e.toolDetail = Self.appendingToolDetail(output, to: e.toolDetail)
+                }
                 entries[idx] = e
             } else {
                 entries.append(ScrollbackEntry(
@@ -115,12 +129,12 @@ final class ScrollbackTracker {
                 ))
             }
             if status == "completed" || status == "failed" {
-                finalizeStreaming()
-                collapseFinishedThoughts()
+                finalizeStreaming(notifying: false)
+                collapseFinishedThoughts(notifying: false)
             }
-            notify()
+            notify(coalescing: status != "completed" && status != "failed")
         case "plan":
-            finalizeStreaming()
+            finalizeStreaming(notifying: false)
             // Body only — no invented "plan" / "Plan updated" chrome.
             let planText = planEntriesText(update["entries"])
             guard !planText.isEmpty else { return }
@@ -132,36 +146,26 @@ final class ScrollbackTracker {
     }
 
     func handleEditDiff(title: String, hunks: [DiffHunk]) {
-        finalizeStreaming()
+        finalizeStreaming(notifying: false)
         entries.append(ScrollbackEntry(kind: .diff, text: title, diffHunks: hunks))
         notify()
     }
 
     private func appendAssistantChunk(_ text: String) {
-        if let id = streamingAssistantID, let idx = entries.firstIndex(where: { $0.id == id }) {
-            var e = entries[idx]
-            e.text += text
-            e.isStreaming = true
-            entries[idx] = e
+        if streamingAssistantID != nil {
+            pendingAssistantChunks.append(text)
         } else {
             finalizeThought()
             let entry = ScrollbackEntry(kind: .assistant, text: text, isStreaming: true)
             streamingAssistantID = entry.id
             entries.append(entry)
         }
-        notify()
+        notify(coalescing: true)
     }
 
     private func appendThoughtChunk(_ text: String) {
-        if let id = streamingThoughtID, let idx = entries.firstIndex(where: { $0.id == id }) {
-            var e = entries[idx]
-            e.text += text
-            e.isStreaming = true
-            // Upstream collapse_mode(running) → Truncated (body visible).
-            if e.thinkingMode == .collapsed {
-                e.thinkingMode = .truncated
-            }
-            entries[idx] = e
+        if streamingThoughtID != nil {
+            pendingThoughtChunks.append(text)
         } else {
             finalizeAssistant()
             // streaming() + default_display_mode Truncated while running.
@@ -171,20 +175,24 @@ final class ScrollbackTracker {
                 isStreaming: true,
                 isCollapsed: false,
                 thinkingMode: .truncated,
-                thoughtStartedAt: Date()
+                thoughtStartedAt: Date.now
             )
             streamingThoughtID = entry.id
             entries.append(entry)
         }
-        notify()
+        notify(coalescing: true)
     }
 
-    func finalizeStreaming() {
+    func finalizeStreaming(notifying: Bool = true) {
         finalizeAssistant()
         finalizeThought()
+        if notifying {
+            notify()
+        }
     }
 
     private func finalizeAssistant() {
+        flushAssistantText()
         guard let id = streamingAssistantID, let idx = entries.firstIndex(where: { $0.id == id }) else { return }
         var e = entries[idx]
         e.isStreaming = false
@@ -193,6 +201,7 @@ final class ScrollbackTracker {
     }
 
     private func finalizeThought() {
+        flushThoughtText()
         guard let id = streamingThoughtID, let idx = entries.firstIndex(where: { $0.id == id }) else { return }
         var e = entries[idx]
         e.isStreaming = false
@@ -200,7 +209,7 @@ final class ScrollbackTracker {
         e.isCollapsed = true
         e.thinkingMode = .collapsed
         if e.thoughtElapsedMs == nil, let start = e.thoughtStartedAt {
-            e.thoughtElapsedMs = Int64(Date().timeIntervalSince(start) * 1000)
+            e.thoughtElapsedMs = Int64(Date.now.timeIntervalSince(start) * 1000)
         }
         entries[idx] = e
         streamingThoughtID = nil
@@ -239,12 +248,14 @@ final class ScrollbackTracker {
     func toggleToolCollapse(id: UUID) { toggleFold(id: id) }
 
     /// Collapse finished thoughts (upstream: thinking → Collapsed on turn end).
-    func collapseFinishedThoughts() {
+    func collapseFinishedThoughts(notifying: Bool = true) {
         for idx in entries.indices where entries[idx].kind == .thinking && !entries[idx].isStreaming {
             entries[idx].isCollapsed = true
             entries[idx].thinkingMode = .collapsed
         }
-        notify()
+        if notifying {
+            notify()
+        }
     }
 
     private func planEntriesText(_ value: ACPProtocol.JSONValue?) -> String {
@@ -271,8 +282,65 @@ final class ScrollbackTracker {
         return s.count > 400 ? String(s.prefix(400)) + "…" : s
     }
 
-    private func notify() {
-        onChange?(displayEntries())
+    private func notify(coalescing: Bool = false) {
+        if coalescing {
+            guard pendingNotificationTask == nil else { return }
+            pendingNotificationTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Self.streamingRefreshInterval)
+                guard let self, !Task.isCancelled else { return }
+                self.pendingNotificationTask = nil
+                self.publishChange()
+            }
+            return
+        }
+
+        pendingNotificationTask?.cancel()
+        pendingNotificationTask = nil
+        publishChange()
+    }
+
+    private func publishChange() {
+        flushStreamingText()
+        // Consumers need the source entries for title/state derivation. Folding is
+        // applied once by AppModel using the active thinking-display preference.
+        onChange?(entries)
+    }
+
+    private func flushStreamingText() {
+        flushAssistantText()
+        flushThoughtText()
+    }
+
+    private func flushAssistantText() {
+        guard !pendingAssistantChunks.isEmpty,
+              let id = streamingAssistantID,
+              let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[idx].text += pendingAssistantChunks.joined()
+        entries[idx].isStreaming = true
+        pendingAssistantChunks.removeAll(keepingCapacity: true)
+    }
+
+    private func flushThoughtText() {
+        guard !pendingThoughtChunks.isEmpty,
+              let id = streamingThoughtID,
+              let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[idx].text += pendingThoughtChunks.joined()
+        entries[idx].isStreaming = true
+        if entries[idx].thinkingMode == .collapsed {
+            entries[idx].thinkingMode = .truncated
+        }
+        pendingThoughtChunks.removeAll(keepingCapacity: true)
+    }
+
+    private static func appendingToolDetail(_ newDetail: String, to existing: String?) -> String {
+        let combined = [existing, newDetail]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard combined.count > maximumToolDetailLength else { return combined }
+
+        let retainedSuffix = combined.suffix(maximumToolDetailLength)
+        return "… earlier output omitted …\n" + String(retainedSuffix)
     }
 
     /// Display layer: verb-group fold + thinking visibility.

@@ -167,10 +167,10 @@ function createWindow() {
   window = new BrowserWindow({
     width: 1080,
     height: 760,
-    minWidth: 820,
+    minWidth: 680,
     minHeight: 620,
     title: "Build Buddy Companion",
-    backgroundColor: "#10120f",
+    backgroundColor: "#f2f0e8",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
