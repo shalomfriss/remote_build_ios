@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
     @Published var mermaidRenderError: String?
     /// Shown in agent chrome when transport drops and reconnect is in progress.
     @Published var reconnectBanner: String?
+    @Published private(set) var scrollbackRefreshID = UUID()
     @Published var simulatorURL: URL?
     @Published var simulatorBuildStatus: String?
     @Published var simulatorBuildError: String?
@@ -80,13 +81,15 @@ final class AppModel: ObservableObject {
     private var persistedWelcomeIsWorktree: Bool?
     private var simulatorStatusByProject: [String: String] = [:]
     private var simulatorErrorByProject: [String: String] = [:]
-    private var simulatorOutputByProject: [String: String] = [:]
+    private var simulatorOutputByteCountByProject: [String: Int] = [:]
+    private var simulatorDisplayedOutputLengthByProject: [String: Int] = [:]
     private var simulatorGenerationByProject: [String: Int] = [:]
     private var simulatorPendingProjects: Set<String> = []
     private var simulatorRepairAttemptsByProject: [String: Int] = [:]
 
     private static let maximumSimulatorRepairAttempts = 3
     private static let maximumSimulatorRepairLogLength = 12_000
+    private static let maximumDisplayedSimulatorLogLength = 8_000
 
     var hasAPIKey: Bool { KeychainHelper.hasAPIKey }
 
@@ -483,8 +486,7 @@ final class AppModel: ObservableObject {
         self.reconnectAttemptID = reconnectAttemptID
         acp.reconnect(
             preserveSessionId: resumeId,
-            cwd: chrome.cwd,
-            showLatestMessage: reloadSession
+            cwd: chrome.cwd
         )
         reconnectTask = Task { @MainActor in
             defer {
@@ -513,8 +515,7 @@ final class AppModel: ObservableObject {
                         self.reconnectBanner = "Switching to remote connection…"
                         self.acp.reconnect(
                             preserveSessionId: resumeId,
-                            cwd: self.chrome.cwd,
-                            showLatestMessage: reloadSession
+                            cwd: self.chrome.cwd
                         )
                         deadline = Date.now.addingTimeInterval(20)
                         continue
@@ -541,6 +542,15 @@ final class AppModel: ObservableObject {
 
     func refreshDisplayedMessages() {
         messages = acp.tracker.displayEntries(showThinking: showThinkingBlocks)
+    }
+
+    /// Publish any coalesced stream chunks before the transcript is hidden and
+    /// optionally request that its viewport follow the newest output.
+    func flushBufferedOutput(followLatest: Bool) {
+        acp.tracker.flushBufferedOutput()
+        if followLatest {
+            scrollbackRefreshID = UUID()
+        }
     }
 
     func showThemePicker() {
@@ -661,8 +671,7 @@ final class AppModel: ObservableObject {
 
             acp.reconnect(
                 preserveSessionId: id,
-                cwd: cwd,
-                showLatestMessage: true
+                cwd: cwd
             )
             let deadline = Date.now.addingTimeInterval(25)
             while Date.now < deadline {
@@ -764,7 +773,15 @@ final class AppModel: ObservableObject {
             CompanionConfig.save(host: host, port: port, useTLS: true, useWebSocket: false)
         }
 
-        let optionalFP = fingerprintDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let optionalFP = CompanionConfig.fingerprintForExplicitPairing(
+            pin: secret,
+            fingerprint: fingerprintDraft,
+            previousPIN: CompanionConfig.savedPIN,
+            previousFingerprint: CompanionConfig.pinnedFingerprint
+        )
+        if optionalFP.isEmpty {
+            fingerprintDraft = ""
+        }
         CompanionConfig.savePairing(pin: secret, fingerprint: optionalFP, token: nil)
         setupError = nil
         Task { await verifyCompanionConnection() }
@@ -1059,7 +1076,8 @@ final class AppModel: ObservableObject {
         simulatorBuildError = nil
         simulatorStatusByProject[projectID] = "queued"
         simulatorErrorByProject[projectID] = nil
-        simulatorOutputByProject[projectID] = ""
+        simulatorOutputByteCountByProject[projectID] = 0
+        simulatorDisplayedOutputLengthByProject[projectID] = 0
         simulatorGenerationByProject[projectID] = nil
         simulatorRepairAttemptsByProject[projectID] = 0
         client.tracker.appendSystem("[ios-build] Build queued")
@@ -1228,20 +1246,42 @@ final class AppModel: ObservableObject {
         if let generation = info.generation,
            simulatorGenerationByProject[projectID] != generation {
             simulatorGenerationByProject[projectID] = generation
-            simulatorOutputByProject[projectID] = ""
+            simulatorOutputByteCountByProject[projectID] = 0
+            simulatorDisplayedOutputLengthByProject[projectID] = 0
         }
 
-        let previousOutput = simulatorOutputByProject[projectID] ?? ""
+        let outputBytes = info.output.utf8
+        let previousByteCount = simulatorOutputByteCountByProject[projectID] ?? 0
         let newOutput: String
-        if info.output.hasPrefix(previousOutput) {
-            newOutput = String(info.output.dropFirst(previousOutput.count))
+        if previousByteCount <= outputBytes.count {
+            newOutput = String(decoding: outputBytes.dropFirst(previousByteCount), as: UTF8.self)
         } else {
             newOutput = info.output
         }
-        simulatorOutputByProject[projectID] = info.output
+        simulatorOutputByteCountByProject[projectID] = outputBytes.count
         let displayOutput = newOutput.trimmingCharacters(in: .newlines)
         if !displayOutput.isEmpty {
-            client.tracker.appendSystem(displayOutput)
+            let displayedLength = simulatorDisplayedOutputLengthByProject[projectID] ?? 0
+            let remainingLength = max(0, Self.maximumDisplayedSimulatorLogLength - displayedLength)
+            if remainingLength > 0 {
+                let visibleOutput = String(displayOutput.prefix(remainingLength))
+                client.tracker.appendSystem(visibleOutput)
+                let updatedLength = displayedLength + visibleOutput.count
+                simulatorDisplayedOutputLengthByProject[projectID] = updatedLength
+                if visibleOutput.count < displayOutput.count {
+                    client.tracker.appendSystem(
+                        "[ios-build] Additional build output omitted to keep the app responsive."
+                    )
+                    simulatorDisplayedOutputLengthByProject[projectID] =
+                        Self.maximumDisplayedSimulatorLogLength + 1
+                }
+            } else if displayedLength == Self.maximumDisplayedSimulatorLogLength {
+                client.tracker.appendSystem(
+                    "[ios-build] Additional build output omitted to keep the app responsive."
+                )
+                simulatorDisplayedOutputLengthByProject[projectID] =
+                    Self.maximumDisplayedSimulatorLogLength + 1
+            }
         }
 
         if isStaleRepairFailure {
@@ -1324,7 +1364,8 @@ final class AppModel: ObservableObject {
         projectCwds.removeAll()
         simulatorStatusByProject.removeAll()
         simulatorErrorByProject.removeAll()
-        simulatorOutputByProject.removeAll()
+        simulatorOutputByteCountByProject.removeAll()
+        simulatorDisplayedOutputLengthByProject.removeAll()
         simulatorGenerationByProject.removeAll()
         simulatorPendingProjects.removeAll()
         simulatorRepairAttemptsByProject.removeAll()
@@ -1337,12 +1378,17 @@ final class AppModel: ObservableObject {
     }
 
     func sendDraft() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft
+        draft = ""
+        submitPrompt(text)
+    }
+
+    func submitPrompt(_ rawText: String) {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
         if text.hasPrefix("/") {
             handleSlashCommand(text)
-            draft = ""
             return
         }
         if text.contains("@") {
@@ -1350,7 +1396,6 @@ final class AppModel: ObservableObject {
         }
 
         acp.tracker.appendUser(text)
-        draft = ""
         acp.sendPrompt(text)
     }
 

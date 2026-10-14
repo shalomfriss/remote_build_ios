@@ -58,14 +58,24 @@ fi
 echo "agent-phone: leave this terminal open and paste the PIN into the iOS app"
 echo ""
 
-if [[ "$SIMULATOR" != "1" ]]; then
+exec_bridge_only() {
   BRIDGE_ARGS=(--real --agent "$AGENT" --host "$HOST" --port "$PORT")
-  [[ "$USE_NGROK" -eq 1 ]] && BRIDGE_ARGS+=(--ngrok)
-  [[ -n "$NGROK_URL" ]] && BRIDGE_ARGS+=(--ngrok-url "$NGROK_URL")
+  if [[ "$USE_NGROK" -eq 1 ]]; then
+    if [[ "$NGROK_URL" == http://* || "$NGROK_URL" == https://* ]]; then
+      echo "agent-phone: the configured HTTPS relay requires the gateway; companion will remain available over LAN" >&2
+    else
+      BRIDGE_ARGS+=(--ngrok)
+      [[ -n "$NGROK_URL" ]] && BRIDGE_ARGS+=(--ngrok-url "$NGROK_URL")
+    fi
+  fi
   if [[ "$HAS_FORWARD_ARGS" -eq 1 ]]; then
     BRIDGE_ARGS+=("${FORWARD_ARGS[@]}")
   fi
   exec bash "$ROOT/companion/scripts/start-acp-bridge.sh" "${BRIDGE_ARGS[@]}"
+}
+
+if [[ "$SIMULATOR" != "1" ]]; then
+  exec_bridge_only
 fi
 
 cleanup() {
@@ -85,9 +95,12 @@ trap 'exit 143' TERM
 
 echo "agent-phone: preparing iOS Simulator for the latest project"
 PROJECT_SIMULATOR_DEVICE="${GROK_PROJECT_SIMULATOR_DEVICE:-${GROK_SIMULATOR_DEVICE:-}}"
-PROJECT_SIM_RUNTIME_JSON="$(python3 "$ROOT/companion/scripts/simulator_runtime.py" \
+if ! PROJECT_SIM_RUNTIME_JSON="$(python3 "$ROOT/companion/scripts/simulator_runtime.py" \
   --boot-only \
-  --device "$PROJECT_SIMULATOR_DEVICE")"
+  --device "$PROJECT_SIMULATOR_DEVICE")"; then
+  echo "agent-phone: iOS Simulator is unavailable; starting the companion without project preview" >&2
+  exec_bridge_only
+fi
 PROJECT_SIM_UDID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["udid"])' <<<"$PROJECT_SIM_RUNTIME_JSON")"
 PROJECT_SIM_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<<"$PROJECT_SIM_RUNTIME_JSON")"
 export GROK_AUTO_BUILD_IOS=1
@@ -96,7 +109,10 @@ export GROK_IOS_DERIVED_DATA="${GROK_IOS_DERIVED_DATA:-$GROK_COMPANION_CWD/.grok
 export GROK_SIMULATOR_STATE_FILE="${GROK_SIMULATOR_STATE_FILE:-$GROK_COMPANION_STATE_DIR/simulator-build.json}"
 rm -f "$GROK_SIMULATOR_STATE_FILE"
 
-STARTUP_PROJECT_JSON="$(python3 "$ROOT/companion/scripts/ios_build_pipeline.py" --launch-latest)"
+if ! STARTUP_PROJECT_JSON="$(python3 "$ROOT/companion/scripts/ios_build_pipeline.py" --launch-latest)"; then
+  echo "agent-phone: latest project could not be prepared; starting the companion without project preview" >&2
+  exec_bridge_only
+fi
 STARTUP_PROJECT_STATUS="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' <<<"$STARTUP_PROJECT_JSON")"
 STARTUP_PROJECT_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("projectName", ""))' <<<"$STARTUP_PROJECT_JSON")"
 if [[ "$STARTUP_PROJECT_STATUS" == "ready" ]]; then
@@ -166,8 +182,92 @@ restart_serve_sim() {
   start_serve_sim
 }
 
+gateway_is_healthy() {
+  curl --silent --fail --max-time 2 --output /dev/null \
+    "http://127.0.0.1:${GATEWAY_PORT}/_grok-build/health"
+}
+
+remote_gateway_is_healthy() {
+  [[ -n "${REMOTE_SIMULATOR_URL:-}" ]] && \
+    curl --silent --fail --max-time 3 --output /dev/null \
+      --header "ngrok-skip-browser-warning: true" \
+      "${REMOTE_SIMULATOR_URL}/_grok-build/health"
+}
+
+restart_gateway() {
+  if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
+    kill "$GATEWAY_PID" 2>/dev/null || true
+    wait "$GATEWAY_PID" 2>/dev/null || true
+  fi
+  : >"$GATEWAY_LOG"
+  npx --yes --package=ws -- node "$ROOT/companion/scripts/companion_gateway.js" \
+    --host 127.0.0.1 --port "$GATEWAY_PORT" \
+    --simulator-url "http://127.0.0.1:${SIMULATOR_PORT}" \
+    --bridge-host 127.0.0.1 --bridge-port "$PORT" >"$GATEWAY_LOG" 2>&1 &
+  GATEWAY_PID=$!
+  for _ in {1..100}; do
+    gateway_is_healthy && return 0
+    if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
+      echo "agent-phone: companion gateway stopped before becoming ready" >&2
+      tail -n 20 "$GATEWAY_LOG" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "agent-phone: timed out waiting for companion gateway" >&2
+  return 1
+}
+
+recover_remote_gateway() {
+  if ! gateway_is_healthy && ! restart_gateway; then
+    return 1
+  fi
+  remote_gateway_is_healthy && return 0
+
+  # A generated ngrok URL can change when restarted, but the running bridge has
+  # already advertised the old URL. Only recover in-place when a stable domain
+  # was configured; otherwise fail visibly instead of advertising a dead route.
+  if [[ -z "$NGROK_URL" ]]; then
+    echo "agent-phone: public endpoint stopped and cannot be recovered at the advertised URL; restart agent-phone" >&2
+    return 1
+  fi
+  if [[ -n "$SIM_NGROK_PID" ]] && kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
+    kill "$SIM_NGROK_PID" 2>/dev/null || true
+    wait "$SIM_NGROK_PID" 2>/dev/null || true
+  fi
+  SIM_NGROK_PID=""
+  python3 "$ROOT/companion/scripts/ngrok_agent.py" \
+    prune-stale --scheme https --url "$NGROK_URL"
+  SIM_NGROK_LOG="$GROK_COMPANION_STATE_DIR/ngrok-simulator.log"
+  : >"$SIM_NGROK_LOG"
+  ngrok http "127.0.0.1:${GATEWAY_PORT}" \
+    --name grok-build-gateway --log stdout --log-format json \
+    --url "$NGROK_URL" >"$SIM_NGROK_LOG" 2>&1 &
+  SIM_NGROK_PID=$!
+
+  for _ in {1..150}; do
+    REMOTE_SIMULATOR_URL="$(python3 "$ROOT/companion/scripts/ngrok_endpoint.py" \
+      "$SIM_NGROK_LOG" https)"
+    if [[ -n "$REMOTE_SIMULATOR_URL" ]] && remote_gateway_is_healthy; then
+      export GROK_SIMULATOR_URL="$REMOTE_SIMULATOR_URL"
+      export GROK_REMOTE_ENDPOINT="${REMOTE_SIMULATOR_URL/https:\/\//wss:\/\/}/acp"
+      echo "agent-phone: public companion endpoint recovered=${GROK_REMOTE_ENDPOINT}" >&2
+      return 0
+    fi
+    if ! kill -0 "$SIM_NGROK_PID" 2>/dev/null; then
+      echo "agent-phone: ngrok stopped during public endpoint recovery" >&2
+      tail -n 10 "$SIM_NGROK_LOG" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "agent-phone: timed out recovering the public companion endpoint" >&2
+  return 1
+}
+
 if ! start_serve_sim; then
-  exit 1
+  echo "agent-phone: project simulator stream is unavailable; starting the companion without project preview" >&2
+  exec_bridge_only
 fi
 
 if [[ "$USE_NGROK" -eq 1 ]]; then
@@ -312,6 +412,7 @@ fi
 
 echo "agent-phone: latest project preview and the agent are ready"
 STREAM_FAILURES=0
+REMOTE_FAILURES=0
 while kill -0 "$BRIDGE_PID" 2>/dev/null; do
   if [[ -n "$SERVE_SIM_PID" ]] && kill -0 "$SERVE_SIM_PID" 2>/dev/null \
     && serve_sim_streams_project_device; then
@@ -324,6 +425,20 @@ while kill -0 "$BRIDGE_PID" 2>/dev/null; do
         echo "agent-phone: project simulator stream recovery failed; retrying" >&2
       fi
       STREAM_FAILURES=0
+    fi
+  fi
+  if [[ "$USE_NGROK" -eq 1 ]]; then
+    if gateway_is_healthy && remote_gateway_is_healthy; then
+      REMOTE_FAILURES=0
+    else
+      REMOTE_FAILURES=$((REMOTE_FAILURES + 1))
+      if [[ "$REMOTE_FAILURES" -ge 3 ]]; then
+        echo "agent-phone: public companion endpoint stopped; recovering" >&2
+        if ! recover_remote_gateway; then
+          echo "agent-phone: public companion endpoint recovery failed; retrying" >&2
+        fi
+        REMOTE_FAILURES=0
+      fi
     fi
   fi
   sleep 2

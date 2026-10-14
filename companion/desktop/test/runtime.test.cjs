@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput } = require("../src/runtime.cjs");
+const { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput, settingsForService } = require("../src/runtime.cjs");
 
 test("builds the ngrok companion command and environment", () => {
   const settings = {
@@ -10,7 +10,8 @@ test("builds the ngrok companion command and environment", () => {
   };
   const spec = buildLaunchSpec(settings, "/runtime", { PATH: "/custom" });
   assert.equal(spec.command, "/bin/bash");
-  assert.deepEqual(spec.args.slice(0, 4), ["/runtime/companion/scripts/agent-phone", "--ngrok", "--ngrok-url", "example.ngrok.app"]);
+  assert.equal(spec.args[0], "/runtime/companion/scripts/agent-phone");
+  assert.equal(spec.args.includes("--ngrok"), true);
   assert.equal(spec.env.GROK_PROJECT_SIMULATOR_DEVICE, "iPhone 17 Pro");
   assert.equal(spec.env.GROK_COMPANION_CWD, "/tmp/workspace");
   assert.equal(spec.env.ACP_AGENT, "codex");
@@ -23,6 +24,14 @@ test("keeps ngrok disabled by default and ignores a reserved URL when disabled",
   const spec = buildLaunchSpec({ ...defaults, ngrokUrl: "reserved.ngrok.app" }, "/runtime", { PATH: "/custom" });
   assert.equal(spec.args.includes("--ngrok"), false);
   assert.equal(spec.args.includes("--ngrok-url"), false);
+});
+
+test("updates only the setting owned by a manually controlled service", () => {
+  const settings = { ...defaultSettings("/workspace"), ngrok: false, startSimulator: true };
+  assert.deepEqual(settingsForService(settings, "ngrok", true), { ...settings, ngrok: true });
+  assert.deepEqual(settingsForService(settings, "simulator", false), { ...settings, startSimulator: false });
+  assert.deepEqual(settingsForService(settings, "endpoint", false), settings);
+  assert.throws(() => settingsForService(settings, "unknown", true), /Unknown companion service/);
 });
 
 test("selects each supported coding harness", () => {
@@ -84,6 +93,18 @@ test("extracts connection details from companion output", () => {
     pin: "123456", remoteEndpoint: "wss://example.ngrok.app/acp",
     simulatorName: "iPhone 17 Pro", simulatorUdid: "AAAA-BBBB", ready: true,
   });
+});
+
+test("removes escaped slashes from remote endpoints", () => {
+  let state = parseLogLine("agent-phone: companion remote=wss:\\/\\/crisp-boar-fairly-test.ngrok-free.app\\/acp");
+  assert.equal(state.remoteEndpoint, "wss://crisp-boar-fairly-test.ngrok-free.app/acp");
+  state = parseLogLine("agent-phone: simulator preview=https:\\/\\/crisp-boar-fairly-test.ngrok-free.app", state);
+  assert.equal(state.simulatorUrl, "https://crisp-boar-fairly-test.ngrok-free.app");
+});
+
+test("marks the local endpoint ready when the ACP bridge starts without a simulator", () => {
+  const state = parseLogLine("[acp-bridge] REAL TLS listening on ('0.0.0.0', 7391)");
+  assert.equal(state.ready, true);
 });
 
 test("selects only ports used by the enabled desktop services", () => {

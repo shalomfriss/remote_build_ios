@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("companion", {
   stop: () => ipcRenderer.invoke("companion:stop"),
   status: () => ipcRenderer.invoke("companion:status"),
   killPorts: settings => ipcRenderer.invoke("companion:kill-ports", settings),
+  setService: (service, enabled, settings) => ipcRenderer.invoke("companion:service", service, enabled, settings),
   clearLogs: () => ipcRenderer.invoke("logs:clear"),
   openUrl: url => ipcRenderer.invoke("url:open", url),
   onState: callback => ipcRenderer.on("companion:state", (_event, state) => callback(state)),

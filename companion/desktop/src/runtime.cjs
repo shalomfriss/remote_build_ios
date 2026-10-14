@@ -26,12 +26,22 @@ function normalizeSettings(saved = {}, defaults = defaultSettings()) {
   settings.model = String(saved.model || defaults.model).trim() || defaults.model;
   settings.simulatorDevice = String(saved.simulatorDevice || defaults.simulatorDevice).trim() || defaults.simulatorDevice;
   delete settings.agent;
+  delete settings.authMode;
   return settings;
 }
 
 function optionalOverride(value) {
   const candidate = String(value || "").trim();
   return /^(default|automatic)$/i.test(candidate) ? "" : candidate;
+}
+
+function settingsForService(settings, service, enabled) {
+  const next = { ...settings };
+  if (service === "endpoint") return next;
+  if (service === "simulator") next.startSimulator = Boolean(enabled);
+  else if (service === "ngrok") next.ngrok = Boolean(enabled);
+  else throw new Error(`Unknown companion service: ${service}`);
+  return next;
 }
 
 function buildLaunchSpec(settings, root, inheritedEnv = process.env) {
@@ -123,23 +133,25 @@ function parseLsofOutput(output, configuredPort) {
 
 function parseLogLine(line, current = {}) {
   const next = { ...current };
+  const cleanEndpoint = value => value.replaceAll("\\/", "/");
   let match = line.match(/\[start-acp-bridge\] PIN: (\d{6})/);
   if (match) next.pin = match[1];
   match = line.match(/agent-phone: companion LAN=(\S+)/);
-  if (match) next.lanEndpoint = match[1].replaceAll("\\/", "/");
+  if (match) next.lanEndpoint = cleanEndpoint(match[1]);
   match = line.match(/agent-phone: companion remote=(\S+)/);
-  if (match) next.remoteEndpoint = match[1];
+  if (match) next.remoteEndpoint = cleanEndpoint(match[1]);
   match = line.match(/\[start-acp-bridge\] ngrok endpoint: (\S+)/);
-  if (match && !next.remoteEndpoint) next.remoteEndpoint = match[1];
+  if (match && !next.remoteEndpoint) next.remoteEndpoint = cleanEndpoint(match[1]);
   match = line.match(/agent-phone: simulator preview=(\S+)/);
-  if (match) next.simulatorUrl = match[1];
+  if (match) next.simulatorUrl = cleanEndpoint(match[1]);
   match = line.match(/agent-phone: project simulator=(.+) \(([-A-Fa-f0-9]+)\)/);
   if (match) {
     next.simulatorName = match[1];
     next.simulatorUdid = match[2];
   }
+  if (line.includes("[acp-bridge]") && line.includes(" listening on ")) next.ready = true;
   if (line.includes("latest project preview and the agent are ready")) next.ready = true;
   return next;
 }
 
-module.exports = { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput };
+module.exports = { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput, settingsForService };

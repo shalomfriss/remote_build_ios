@@ -61,7 +61,9 @@ cat >"$DEST" <<EOF
 		<string>${RUNTIME}/acp_tcp_bridge.py</string>
 		<string>--real</string>
 		<string>--host</string>
-		<string>127.0.0.1</string>
+		<!-- TLS + PIN protect the bridge; listen on all interfaces so a physical
+		     iPhone on the local network can reach the persistent companion. -->
+		<string>0.0.0.0</string>
 		<string>--port</string>
 		<string>7391</string>
 	</array>
@@ -106,7 +108,12 @@ launchctl kickstart -k "gui/${UID_NUM}/${LABEL}" 2>/dev/null || true
 
 for _ in $(seq 1 40); do
   if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',7391),1); s.close()" 2>/dev/null; then
-    echo "OK: companion launchd ${LABEL} listening on 127.0.0.1:7391 (TLS+PIN)"
+    echo "OK: companion launchd ${LABEL} listening on 0.0.0.0:7391 (TLS+PIN)"
+    if LAN_ENDPOINT="$(python3 "$ROOT/companion/scripts/phone_endpoint.py" --port 7391 2>/dev/null)"; then
+      echo "    phone endpoint=${LAN_ENDPOINT/http:\/\//tcp:\/\/}"
+    else
+      echo "    phone endpoint=use this Mac's LAN address on port 7391"
+    fi
     echo "    runtime=${RUNTIME}"
     echo "    python=${PYTHON}"
     launchctl print "gui/${UID_NUM}/${LABEL}" 2>/dev/null | rg "state =|pid =" | head -5 || true

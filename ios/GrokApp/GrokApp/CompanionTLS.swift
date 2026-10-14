@@ -53,9 +53,8 @@ enum CompanionTLS {
                         complete(false)
                         return
                     }
-                    let match = fp == expected
-                        || (expected.count >= 16 && expected.count < 64 && fp.hasPrefix(expected))
-                    if match { capture?.set(fp) }
+                    capture?.set(fp)
+                    let match = fingerprintMatches(observed: fp, expected: expected)
                     complete(match)
                 },
                 DispatchQueue.global(qos: .userInitiated)
@@ -76,6 +75,13 @@ enum CompanionTLS {
             )
         }
         return NWParameters(tls: tls)
+    }
+
+    static func fingerprintMatches(observed: String, expected: String) -> Bool {
+        let observed = observed.lowercased().filter(\.isHexDigit)
+        let expected = expected.lowercased().filter(\.isHexDigit)
+        return observed == expected
+            || (expected.count >= 16 && expected.count < 64 && observed.hasPrefix(expected))
     }
 
     /// Must use `sec_trust_copy_ref` — `unsafeBitCast` to SecTrust crashes (SIGSEGV).

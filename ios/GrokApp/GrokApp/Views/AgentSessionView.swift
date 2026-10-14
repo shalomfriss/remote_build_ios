@@ -47,6 +47,7 @@ struct AgentSessionView: View {
             ScrollbackView(
                 entries: model.messages,
                 theme: theme,
+                refreshID: model.scrollbackRefreshID,
                 showTimestamps: model.showTimestamps,
                 onToggleFold: { id in model.acp.tracker.toggleFold(id: id) },
                 onOpenMermaid: { source in await model.renderMermaidPNG(source: source) },
@@ -62,51 +63,7 @@ struct AgentSessionView: View {
                     onSelect: { model.selectPermission(optionId: $0) }
                 )
             }
-            if model.isThemeDraft {
-                ThemeSuggestDropdown(
-                    themes: model.availableThemes,
-                    activeTheme: model.themeName,
-                    theme: theme,
-                    onSelect: { model.selectThemeFromDraft($0) }
-                )
-            } else if model.atFileQuery != nil {
-                FileSuggestDropdown(
-                    files: model.filteredAtFiles,
-                    theme: theme,
-                    onSelect: { model.insertAtFile($0) }
-                )
-                .task { await model.refreshWorkspaceFiles() }
-            } else if model.draft.hasPrefix("/") {
-                SlashDropdown(
-                    commands: model.filteredSlashCommands,
-                    theme: theme,
-                    onSelect: { cmd in
-                        model.draft = cmd.name + " "
-                    }
-                )
-            }
-            TurnStatusBar(
-                activity: model.chrome.turnActivity,
-                isRunning: model.acp.isRunning,
-                turnStartedAt: model.chrome.turnStartedAt,
-                phaseStartedAt: model.chrome.phaseStartedAt,
-                turnTokensUsed: model.chrome.turnTokensUsed,
-                queuedPromptCount: model.chrome.queuedPromptCount,
-                theme: theme,
-                onStop: { model.stopTurn() }
-            )
-            PromptBar(
-                draft: $model.draft,
-                isFocused: $model.isPromptFocused,
-                modelLine: model.chrome.promptInfoLine,
-                theme: theme,
-                onSend: { model.sendDraft() }
-            )
-            .onChange(of: model.draft) { _, newValue in
-                if newValue.contains("@") {
-                    Task { await model.refreshWorkspaceFiles() }
-                }
-            }
+            AgentComposerView()
         }
         .background(theme.bgBase)
     }

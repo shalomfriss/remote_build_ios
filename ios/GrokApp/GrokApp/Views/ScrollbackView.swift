@@ -10,12 +10,14 @@ struct ScrollbackView: View {
 
     let entries: [ScrollbackEntry]
     let theme: GrokTheme
+    let refreshID: UUID
     var showTimestamps: Bool = AppSettings.showTimestamps
     var onToggleFold: ((UUID) -> Void)?
     var onOpenMermaid: ((String) async -> Data?)?
     var onDismissKeyboard: (() -> Void)?
 
     @State private var followsStreamingOutput = true
+    @State private var pendingScrollTask: Task<Void, Never>?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -45,6 +47,7 @@ struct ScrollbackView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 4).onChanged { _ in
                     followsStreamingOutput = false
+                    pendingScrollTask?.cancel()
                 }
             )
             .onChange(of: entries.count) { _, _ in
@@ -52,13 +55,21 @@ struct ScrollbackView: View {
                     followsStreamingOutput = true
                 }
                 if followsStreamingOutput {
-                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                    scheduleScrollToBottom(using: proxy)
                 }
             }
             .onChange(of: streamingTextCount) { _, _ in
                 if followsStreamingOutput {
-                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                    scheduleScrollToBottom(using: proxy)
                 }
+            }
+            .onChange(of: refreshID, initial: true) {
+                followsStreamingOutput = true
+                scheduleScrollToBottom(using: proxy)
+            }
+            .onDisappear {
+                pendingScrollTask?.cancel()
+                pendingScrollTask = nil
             }
         }
     }
@@ -66,6 +77,18 @@ struct ScrollbackView: View {
     private var streamingTextCount: Int {
         guard let last = entries.last, last.isStreaming else { return 0 }
         return last.text.count
+    }
+
+    private func scheduleScrollToBottom(using proxy: ScrollViewProxy) {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            // Let LazyVStack commit its newest buffered rows before resolving
+            // the bottom anchor. This avoids redundant layout work per chunk.
+            try? await Task.sleep(for: .milliseconds(30))
+            guard !Task.isCancelled, followsStreamingOutput else { return }
+            proxy.scrollTo(Self.bottomID, anchor: .bottom)
+            pendingScrollTask = nil
+        }
     }
 }
 
@@ -186,10 +209,11 @@ struct ScrollbackRow: View, Equatable {
                         .lineLimit(entry.isCollapsed ? 1 : 4)
                 }
                 if !entry.isCollapsed, let detail = entry.toolDetail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(16)
+                    BufferedPlainText(
+                        text: detail,
+                        font: .caption.monospaced(),
+                        color: theme.textSecondary
+                    )
                         .padding(.leading, 16)
                 }
             }
@@ -202,18 +226,21 @@ struct ScrollbackRow: View, Equatable {
                         .foregroundStyle(theme.gray)
                 }
                 if entry.isStreaming {
-                    Text(entry.text)
-                        .font(agentFont)
-                        .foregroundStyle(theme.textPrimary)
+                    BufferedPlainText(
+                        text: entry.text,
+                        font: agentFont,
+                        color: theme.textPrimary
+                    )
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(MarkdownLite.segments(entry.text).enumerated()), id: \.offset) { _, seg in
                             switch seg {
                             case .markdown(let text):
-                                Text(MarkdownLite.attributed(text))
-                                    .font(agentFont)
-                                    .foregroundStyle(theme.textPrimary)
-                                    .textSelection(.enabled)
+                                BufferedMarkdownText(
+                                    text: text,
+                                    font: agentFont,
+                                    color: theme.textPrimary
+                                )
                             case .mermaid(let source):
                                 MermaidBlockView(
                                     source: source,
@@ -368,6 +395,73 @@ struct ScrollbackRow: View, Equatable {
         case .error: return theme.accentError
         case .system: return .clear
         }
+    }
+}
+
+/// Breaks very large live/tool output into stable Text nodes. LazyVStack then
+/// lays out only the chunks near the viewport instead of one ever-growing glyph run.
+private struct BufferedPlainText: View {
+    let text: String
+    let font: Font
+    let color: Color
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(OutputTextBuffer.chunks(text).enumerated()), id: \.offset) { _, chunk in
+                Text(chunk)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+}
+
+/// Completed responses keep lightweight Markdown while retaining the same
+/// bounded text-node size as live output.
+private struct BufferedMarkdownText: View {
+    let text: String
+    let font: Font
+    let color: Color
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(OutputTextBuffer.chunks(text).enumerated()), id: \.offset) { _, chunk in
+                Text(MarkdownLite.attributed(chunk))
+                    .font(font)
+                    .foregroundStyle(color)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+private enum OutputTextBuffer {
+    private static let targetChunkLength = 2_000
+
+    static func chunks(_ text: String) -> [String] {
+        guard text.count > targetChunkLength else { return [text] }
+
+        var result: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            let proposedEnd = text.index(
+                start,
+                offsetBy: targetChunkLength,
+                limitedBy: text.endIndex
+            ) ?? text.endIndex
+            var end = proposedEnd
+            if proposedEnd < text.endIndex,
+               let newline = text[start..<proposedEnd].lastIndex(of: "\n") {
+                end = text.index(after: newline)
+            }
+            result.append(String(text[start..<end]))
+            start = end
+        }
+        return result
     }
 }
 

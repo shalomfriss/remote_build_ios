@@ -66,11 +66,39 @@ function activeEndpoint(connection) {
   return currentSettings.ngrok ? (connection.remoteEndpoint || connection.lanEndpoint) : connection.lanEndpoint;
 }
 
+const serviceCopy = {
+  endpoint: { start: "Start endpoint", stop: "Kill endpoint", waiting: "Waiting for the local address", idle: "Available on your Wi-Fi network." },
+  simulator: { start: "Start stream", stop: "Kill stream", waiting: "Preparing the simulator stream", idle: "Streams the active iPhone simulator." },
+  ngrok: { start: "Start ngrok", stop: "Kill ngrok", waiting: "Opening the secure tunnel", idle: "Optional cellular access." },
+};
+
+function renderServiceControls() {
+  const services = state.services || {};
+  const operation = state.serviceOperation;
+  for (const [name, copy] of Object.entries(serviceCopy)) {
+    const service = services[name] || { enabled: false, running: false, endpoint: "" };
+    const row = document.querySelector(`[data-service-row="${name}"]`);
+    const status = document.getElementById(`service-${name}-status`);
+    const detail = document.getElementById(`service-${name}-detail`);
+    const button = row.querySelector(".service-button");
+    const changing = operation?.service === name;
+    row.classList.toggle("live", service.running);
+    row.classList.toggle("starting", service.enabled && !service.running);
+    status.textContent = changing ? (operation.enabled ? "Starting" : "Stopping") : service.running ? "Live" : service.enabled ? "Starting" : "Stopped";
+    detail.textContent = service.endpoint || (service.enabled ? copy.waiting : copy.idle);
+    button.textContent = service.enabled ? copy.stop : copy.start;
+    button.dataset.enabled = String(Boolean(service.enabled));
+    button.disabled = Boolean(operation) || state.stopping;
+  }
+}
+
 function render(next) {
+  if (next.settings) setForm(next.settings);
   state = { ...state, ...next };
   const connection = state.connection || {};
   const conflicts = state.portConflicts || [];
   const status = document.getElementById("status");
+  const serviceBusy = Boolean(state.serviceOperation);
   const mode = state.stopping ? "starting" : state.running ? (connection.ready ? "running" : "starting") : "stopped";
   status.className = `status ${mode}`;
   status.innerHTML = `<span></span>${state.stopping ? "Stopping" : connection.ready ? "Connected" : state.running ? "Starting" : "Offline"}`;
@@ -82,13 +110,14 @@ function render(next) {
       : state.running
         ? `Preparing your simulator, ${currentSettings.ngrok ? "secure tunnel" : "local bridge"}, and coding agent.`
         : "Start the companion to bring your project, simulator, and coding agent onto your phone.";
-  document.getElementById("start").disabled = state.running;
-  document.getElementById("stop").disabled = !state.running || state.stopping;
-  document.querySelectorAll("#settings input,#settings select,#settings .browse,#save-settings").forEach(element => { element.disabled = state.running; });
+  document.getElementById("start").disabled = state.running || serviceBusy;
+  document.getElementById("stop").disabled = !state.running || state.stopping || serviceBusy;
+  document.querySelectorAll("#settings input,#settings select,#settings .browse,#save-settings").forEach(element => { element.disabled = state.running || serviceBusy; });
   updateConnectionMode();
   document.getElementById("pin").textContent = connection.pin ? connection.pin.split("").join(" ") : "· · · · · ·";
   document.getElementById("remote").textContent = activeEndpoint(connection) || "Not connected";
   document.getElementById("simulator").textContent = connection.simulatorName || "Not running";
+  renderServiceControls();
 
   const conflictPanel = document.getElementById("port-conflicts");
   conflictPanel.hidden = conflicts.length === 0;
@@ -135,6 +164,21 @@ document.getElementById("start").addEventListener("click", async () => {
   } catch (error) { toast(error.message); }
 });
 document.getElementById("stop").addEventListener("click", async () => render(await window.companion.stop()));
+document.querySelectorAll(".service-button").forEach(button => button.addEventListener("click", async () => {
+  const service = button.dataset.service;
+  const enabled = button.dataset.enabled === "true";
+  button.disabled = true;
+  try {
+    const result = await window.companion.setService(service, !enabled, settingsFromForm());
+    if (result.settings) setForm(result.settings);
+    render(result);
+    const verb = enabled ? "stopping" : "starting";
+    toast(`${service === "endpoint" ? "Local endpoint" : service === "simulator" ? "Simulator stream" : "ngrok"} ${verb}`);
+  } catch (error) {
+    toast(error.message);
+    render(await window.companion.status());
+  }
+}));
 document.getElementById("kill-ports").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;

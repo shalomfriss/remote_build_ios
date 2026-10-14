@@ -62,6 +62,7 @@
 		B10000010000000000000038 /* RemoteSimulatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000038 /* RemoteSimulatorView.swift */; };
 		B10000010000000000000039 /* WorkspaceTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000039 /* WorkspaceTab.swift */; };
 		B1000001000000000000003A /* WorkspaceTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000003A /* WorkspaceTabBar.swift */; };
+		B1000001000000000000003B /* AgentComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000001000000000000003B /* AgentComposerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +114,7 @@
 		F10000010000000000000024 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		F10000010000000000000025 /* UpstreamThinkingAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpstreamThinkingAppearance.swift; sourceTree = "<group>"; };
 		F10000010000000000000026 /* TurnStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnStatusBar.swift; sourceTree = "<group>"; };
+		F1000001000000000000003B /* AgentComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentComposerView.swift; sourceTree = "<group>"; };
 		F10000010000000000000027 /* logo05.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = logo05.txt; sourceTree = "<group>"; };
 		F10000010000000000000028 /* MarkdownLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownLite.swift; sourceTree = "<group>"; };
 		F10000010000000000000029 /* logo07.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = logo07.txt; sourceTree = "<group>"; };
@@ -228,6 +230,7 @@
 				F1000001000000000000002A /* WelcomeLogoView.swift */,
 				F10000010000000000000009 /* OnboardingView.swift */,
 				F1000001000000000000000A /* AgentSessionView.swift */,
+				F1000001000000000000003B /* AgentComposerView.swift */,
 				F10000010000000000000023 /* AgentStatusBar.swift */,
 				F1000001000000000000000B /* ScrollbackView.swift */,
 				F1000001000000000000000C /* PromptBar.swift */,
@@ -426,6 +429,7 @@
 				B1000001000000000000002A /* WelcomeLogoView.swift in Sources */,
 				B10000010000000000000009 /* OnboardingView.swift in Sources */,
 				B1000001000000000000000A /* AgentSessionView.swift in Sources */,
+				B1000001000000000000003B /* AgentComposerView.swift in Sources */,
 				B10000010000000000000023 /* AgentStatusBar.swift in Sources */,
 				B1000001000000000000000B /* ScrollbackView.swift in Sources */,
 				B1000001000000000000000C /* PromptBar.swift in Sources */,
@@ -537,7 +541,6 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Grok Build";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInWebContent = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSBonjourServices = "_grok-build._tcp";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Grok Build discovers and connects to the companion agent on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsMultipleScenes = NO;
@@ -570,7 +573,6 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Grok Build";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInWebContent = YES;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSBonjourServices = "_grok-build._tcp";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Grok Build discovers and connects to the companion agent on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsMultipleScenes = NO;

@@ -9,5 +9,11 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_grok-build._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Grok Build discovers and connects to the companion agent on your local network.</string>
 </dict>
 </plist>

@@ -316,6 +316,24 @@ enum CompanionConfig {
         pairToken = token
     }
 
+    /// A freshly entered PIN explicitly authorizes pairing with the companion
+    /// that printed it. Do not carry an unchanged certificate pin from the
+    /// previous companion into that new pairing attempt; the new leaf is
+    /// captured and persisted only after the PIN succeeds.
+    static func fingerprintForExplicitPairing(
+        pin: String,
+        fingerprint: String,
+        previousPIN: String,
+        previousFingerprint: String
+    ) -> String {
+        let normalizedFingerprint = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPrevious = previousFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pin != previousPIN, normalizedFingerprint == normalizedPrevious {
+            return ""
+        }
+        return normalizedFingerprint
+    }
+
     static var lastSession: (id: String, cwd: String?)? {
         guard let id = UserDefaults.standard.string(forKey: lastSessionIDKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines),

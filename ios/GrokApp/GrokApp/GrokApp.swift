@@ -21,8 +21,10 @@ struct GrokApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .background:
+                        model.flushBufferedOutput(followLatest: false)
                         wasBackgrounded = true
                     case .active:
+                        model.flushBufferedOutput(followLatest: wasBackgrounded)
                         model.reconnectTransportIfNeeded(reloadSession: wasBackgrounded)
                         wasBackgrounded = false
                     case .inactive:

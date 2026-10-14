@@ -3,7 +3,7 @@ const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
-const { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput } = require("./runtime.cjs");
+const { buildLaunchSpec, configuredPorts, defaultSettings, normalizeSettings, parseLogLine, parseLsofOutput, settingsForService } = require("./runtime.cjs");
 
 let window;
 let companion;
@@ -12,6 +12,8 @@ let powerBlocker;
 let connection = {};
 let recentLogs = [];
 let portConflicts = [];
+let activeSettings;
+let serviceOperation;
 
 function repoRoot() {
   return app.isPackaged
@@ -46,6 +48,24 @@ function snapshot(extra = {}) {
     connection,
     portConflicts,
     logs: recentLogs,
+    services: {
+      endpoint: {
+        enabled: Boolean(companion),
+        running: Boolean(companion && connection.ready),
+        endpoint: connection.lanEndpoint || "",
+      },
+      simulator: {
+        enabled: Boolean(companion && activeSettings?.startSimulator !== false),
+        running: Boolean(companion && connection.simulatorUrl),
+        endpoint: connection.simulatorUrl || "",
+      },
+      ngrok: {
+        enabled: Boolean(companion && activeSettings?.ngrok),
+        running: Boolean(companion && connection.remoteEndpoint),
+        endpoint: connection.remoteEndpoint || "",
+      },
+    },
+    serviceOperation,
     ...extra,
   };
 }
@@ -122,6 +142,43 @@ function stopCompanion() {
   }, 5000).unref();
 }
 
+async function waitForCompanionToStop(timeout = 7500) {
+  const deadline = Date.now() + timeout;
+  while (companion && Date.now() < deadline) await wait(100);
+  if (companion) throw new Error("The companion did not stop in time.");
+}
+
+async function setServiceEnabled(service, enabled, settings) {
+  if (serviceOperation) throw new Error("Wait for the current service change to finish.");
+  const nextSettings = settingsForService(settings, service, enabled);
+  if (service === "endpoint") {
+    if (enabled) return startCompanion(nextSettings);
+    stopCompanion();
+    return snapshot();
+  }
+
+  writeSettings(nextSettings);
+  const settingKey = service === "ngrok" ? "ngrok" : "startSimulator";
+  if (companion && Boolean(activeSettings?.[settingKey]) === Boolean(enabled)) {
+    return snapshot({ settings: nextSettings });
+  }
+  if (!companion && !enabled) return snapshot({ settings: nextSettings });
+
+  serviceOperation = { service, enabled: Boolean(enabled) };
+  publish({ settings: nextSettings });
+  try {
+    if (companion) {
+      stopCompanion();
+      await waitForCompanionToStop();
+    }
+    const result = await startCompanion(nextSettings);
+    return { ...result, settings: nextSettings };
+  } finally {
+    serviceOperation = undefined;
+    publish({ settings: nextSettings });
+  }
+}
+
 async function startCompanion(settings) {
   if (companion) return snapshot();
   if (!settings.projectsRoot) throw new Error("Choose a projects folder.");
@@ -139,6 +196,7 @@ async function startCompanion(settings) {
   recentLogs = [];
   stopping = false;
   portConflicts = [];
+  activeSettings = { ...settings };
   const spec = buildLaunchSpec(settings, repoRoot());
   companion = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -153,6 +211,7 @@ async function startCompanion(settings) {
   companion.on("exit", (code, signal) => {
     appendLog("system", `Companion stopped${signal ? ` (${signal})` : ` (exit ${code})`}`);
     companion = undefined;
+    activeSettings = undefined;
     stopping = false;
     connection.ready = false;
     if (powerBlocker && powerSaveBlocker.isStarted(powerBlocker)) powerSaveBlocker.stop(powerBlocker);
@@ -194,6 +253,7 @@ ipcMain.handle("companion:start", (_event, settings) => startCompanion(settings)
 ipcMain.handle("companion:stop", () => { stopCompanion(); return snapshot(); });
 ipcMain.handle("companion:status", () => snapshot());
 ipcMain.handle("companion:kill-ports", (_event, settings) => killConfiguredPortProcesses(settings));
+ipcMain.handle("companion:service", (_event, service, enabled, settings) => setServiceEnabled(service, enabled, settings));
 ipcMain.handle("logs:clear", () => { recentLogs = []; publish(); });
 ipcMain.handle("url:open", (_event, url) => {
   if (/^https?:\/\//.test(url)) return shell.openExternal(url);

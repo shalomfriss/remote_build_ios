@@ -82,6 +82,33 @@
             </article>
           </section>
 
+          <section class="service-section" aria-labelledby="service-title">
+            <header>
+              <div><p class="kicker">Manual control</p><h2 id="service-title">Services</h2></div>
+              <p>Changing the simulator or ngrok restarts the companion to keep every advertised endpoint accurate.</p>
+            </header>
+            <div class="service-list">
+              <article class="service-row" data-service-row="endpoint">
+                <span class="service-indicator" aria-hidden="true"></span>
+                <div><h3>Local endpoint</h3><p id="service-endpoint-detail">Available on your Wi-Fi network.</p></div>
+                <strong id="service-endpoint-status">Stopped</strong>
+                <button class="service-button" type="button" data-service="endpoint">Start endpoint</button>
+              </article>
+              <article class="service-row" data-service-row="simulator">
+                <span class="service-indicator" aria-hidden="true"></span>
+                <div><h3>Simulator stream</h3><p id="service-simulator-detail">Streams the active iPhone simulator.</p></div>
+                <strong id="service-simulator-status">Stopped</strong>
+                <button class="service-button" type="button" data-service="simulator">Start stream</button>
+              </article>
+              <article class="service-row" data-service-row="ngrok">
+                <span class="service-indicator" aria-hidden="true"></span>
+                <div><h3>ngrok connection</h3><p id="service-ngrok-detail">Optional cellular access.</p></div>
+                <strong id="service-ngrok-status">Stopped</strong>
+                <button class="service-button" type="button" data-service="ngrok">Start ngrok</button>
+              </article>
+            </div>
+          </section>
+
           <section class="output-section">
             <header>
               <div><p class="kicker">Process output</p><h2>Live activity</h2></div>

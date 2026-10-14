@@ -76,4 +76,45 @@ final class CompanionConfigTests: XCTestCase {
         XCTAssertFalse(CompanionConfig.isRemotelyReachableHost("10.0.0.4"))
         XCTAssertFalse(CompanionConfig.isRemotelyReachableHost("build-mac.local"))
     }
+
+    func testNewPINDropsUnchangedFingerprintForExplicitRepairing() {
+        XCTAssertEqual(
+            CompanionConfig.fingerprintForExplicitPairing(
+                pin: "222222",
+                fingerprint: "old-fingerprint",
+                previousPIN: "111111",
+                previousFingerprint: "old-fingerprint"
+            ),
+            ""
+        )
+    }
+
+    func testExplicitFingerprintIsKeptWhenPairingWithNewPIN() {
+        XCTAssertEqual(
+            CompanionConfig.fingerprintForExplicitPairing(
+                pin: "222222",
+                fingerprint: "new-fingerprint",
+                previousPIN: "111111",
+                previousFingerprint: "old-fingerprint"
+            ),
+            "new-fingerprint"
+        )
+    }
+
+    func testFingerprintMatchingAcceptsFullAndLegacyPrefixPins() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        XCTAssertTrue(CompanionTLS.fingerprintMatches(observed: fingerprint, expected: fingerprint))
+        XCTAssertTrue(
+            CompanionTLS.fingerprintMatches(
+                observed: fingerprint,
+                expected: String(fingerprint.prefix(16))
+            )
+        )
+        XCTAssertFalse(
+            CompanionTLS.fingerprintMatches(
+                observed: fingerprint,
+                expected: String(repeating: "cd", count: 32)
+            )
+        )
+    }
 }

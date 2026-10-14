@@ -14,7 +14,9 @@
 		<string>REPLACE_AT_INSTALL/acp_tcp_bridge.py</string>
 		<string>--real</string>
 		<string>--host</string>
-		<string>127.0.0.1</string>
+		<!-- TLS + PIN protect the bridge; listen on all interfaces so a physical
+		     iPhone on the local network can reach the persistent companion. -->
+		<string>0.0.0.0</string>
 		<string>--port</string>
 		<string>7391</string>
 	</array>

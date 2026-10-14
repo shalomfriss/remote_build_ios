@@ -3,6 +3,9 @@
 Electron control center for `companion/scripts/agent-phone`. It starts and stops
 the full companion process group, displays its PIN and endpoints, streams logs,
 and persists workspace, project, simulator, coding harness, port, and ngrok settings.
+The Services section can also start or kill the local endpoint, simulator stream,
+and ngrok connection individually. Dependent service changes safely restart the
+supervised companion process so advertised endpoints do not become stale.
 
 ## Development
 

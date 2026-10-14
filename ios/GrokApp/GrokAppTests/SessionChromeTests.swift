@@ -36,20 +36,35 @@ final class SessionChromeTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadedHistoryKeepsOnlyLatestConversationMessage() {
+    func testLoadedHistoryAtomicallyReplacesTranscript() {
         let tracker = ScrollbackTracker()
         tracker.appendUser("Earlier request")
-        tracker.handleSessionUpdate([
-            "sessionUpdate": .string("tool_call"),
-            "toolCallId": .string("tool-1"),
-            "title": .string("Build"),
-            "status": .string("completed"),
-        ])
-        tracker.showOnlyLatestMessage(kind: .assistant, text: "Most recent reply")
+        let loadedEntries = [
+            ScrollbackEntry(kind: .user, text: "Loaded request"),
+            ScrollbackEntry(kind: .assistant, text: "Loaded reply"),
+        ]
+        tracker.replaceAll(with: loadedEntries)
 
-        XCTAssertEqual(tracker.entries.count, 1)
-        XCTAssertEqual(tracker.entries.first?.kind, .assistant)
-        XCTAssertEqual(tracker.entries.first?.text, "Most recent reply")
+        XCTAssertEqual(tracker.entries.count, 2)
+        XCTAssertEqual(tracker.entries.first?.text, "Loaded request")
+        XCTAssertEqual(tracker.entries.last?.text, "Loaded reply")
+    }
+
+    @MainActor
+    func testHistoryReplayKeepsUserAndAssistantText() {
+        let tracker = ScrollbackTracker()
+        tracker.handleSessionHistoryUpdate([
+            "sessionUpdate": .string("user_message_chunk"),
+            "content": .object(["text": .string("Question")]),
+        ])
+        tracker.handleSessionHistoryUpdate([
+            "sessionUpdate": .string("agent_message_chunk"),
+            "content": .object(["text": .string("Answer")]),
+        ])
+        tracker.finalizeStreaming()
+
+        XCTAssertEqual(tracker.entries.map(\.kind), [.user, .assistant])
+        XCTAssertEqual(tracker.entries.map(\.text), ["Question", "Answer"])
     }
 
     @MainActor
@@ -66,7 +81,7 @@ final class SessionChromeTests: XCTestCase {
         }
 
         XCTAssertEqual(publishedChanges, 0)
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .milliseconds(160))
         XCTAssertEqual(publishedChanges, 1)
         XCTAssertEqual(tracker.entries.first?.text.count, 100)
 
@@ -90,6 +105,21 @@ final class SessionChromeTests: XCTestCase {
 
         XCTAssertEqual(tracker.entries.first?.text.count, 100)
         XCTAssertFalse(tracker.entries.first?.isStreaming ?? true)
+    }
+
+    @MainActor
+    func testToolOutputIsNotTruncated() {
+        let tracker = ScrollbackTracker()
+        let output = String(repeating: "x", count: 20_000)
+
+        tracker.handleSessionUpdate([
+            "sessionUpdate": .string("tool_call_update"),
+            "toolCallId": .string("tool-1"),
+            "status": .string("completed"),
+            "rawOutput": .string(output),
+        ])
+
+        XCTAssertEqual(tracker.entries.first?.toolDetail, output)
     }
 
     @MainActor

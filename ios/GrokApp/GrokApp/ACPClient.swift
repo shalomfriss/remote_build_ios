@@ -4,6 +4,76 @@
 import Foundation
 import Network
 
+private enum WebSocketOpenError: LocalizedError {
+    case closed
+
+    var errorDescription: String? {
+        "The companion closed the WebSocket before it connected."
+    }
+}
+
+/// Resolves the WebSocket handshake from URLSession's actual open callback.
+/// Calling `sendPing` immediately after `resume()` races the HTTP upgrade on
+/// physical devices and can fail with "Socket is not connected."
+private final class WebSocketOpenObserver: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Void, Error>?
+    private var waiter: CheckedContinuation<Void, Error>?
+
+    func waitUntilOpen() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(with: result)
+            } else {
+                waiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    private func resolve(_ newResult: Result<Void, Error>) {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        result = newResult
+        let continuation = waiter
+        waiter = nil
+        lock.unlock()
+        continuation?.resume(with: newResult)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        resolve(.success(()))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        resolve(.failure(WebSocketOpenError.closed))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error {
+            resolve(.failure(error))
+        }
+    }
+}
+
 struct SimulatorBuildInfo {
     let url: URL?
     let status: String?
@@ -29,6 +99,7 @@ final class ACPClient: ObservableObject {
     private var connection: NWConnection?
     private var webSocketTask: URLSessionWebSocketTask?
     private var webSocketSession: URLSession?
+    private var webSocketOpenObserver: WebSocketOpenObserver?
     private var receiveBuffer = Data()
     private var requestID = 0
     private var pendingPrompt: String?
@@ -56,13 +127,10 @@ final class ACPClient: ObservableObject {
 
     private var preserveSessionIdOnReconnect: String?
     private var preserveSessionCwdOnReconnect: String?
-    private var showLatestMessageOnReconnect = false
     private var pendingProjectName: String?
     private var receiveLoopActive = false
     private var isReplayingSessionHistory = false
-    private var replayedMessageKind: ScrollbackKind?
-    private var replayedMessageText = ""
-    private var replayedChunkKind: ScrollbackKind?
+    private var historyReplayTracker: ScrollbackTracker?
 
     private(set) var chrome = SessionChrome()
     private var lastPublishedChrome: SessionChrome?
@@ -135,7 +203,13 @@ final class ACPClient: ObservableObject {
             return
         }
 
-        let session = URLSession(configuration: .default)
+        let openObserver = WebSocketOpenObserver()
+        webSocketOpenObserver = openObserver
+        let session = URLSession(
+            configuration: .default,
+            delegate: openObserver,
+            delegateQueue: nil
+        )
         webSocketSession = session
         var request = URLRequest(url: url)
         request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
@@ -151,18 +225,18 @@ final class ACPClient: ObservableObject {
         }
 
         task.resume()
-        receiveLoopActive = true
-        receiveWebSocketLoop()
         handshakeTask = Task { @MainActor [weak self, weak task] in
             guard let self, let task else { return }
             do {
-                try await self.waitUntilWebSocketOpen(task)
+                try await openObserver.waitUntilOpen()
             } catch {
                 guard self.webSocketTask === task else { return }
                 self.fail("Could not reach companion: \(error.localizedDescription)")
                 return
             }
             guard self.webSocketTask === task else { return }
+            self.receiveLoopActive = true
+            self.receiveWebSocketLoop()
             self.startWebSocketKeepAlive(task)
             await self.runConnectPipeline()
         }
@@ -176,7 +250,7 @@ final class ACPClient: ObservableObject {
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled, self.webSocketTask === task else { return }
                 do {
-                    try await self.waitUntilWebSocketOpen(task)
+                    try await self.sendWebSocketPing(task)
                 } catch {
                     guard self.webSocketTask === task else { return }
                     if self.sessionReady {
@@ -190,7 +264,7 @@ final class ACPClient: ObservableObject {
         }
     }
 
-    private func waitUntilWebSocketOpen(_ task: URLSessionWebSocketTask) async throws {
+    private func sendWebSocketPing(_ task: URLSessionWebSocketTask) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             task.sendPing { error in
@@ -206,12 +280,10 @@ final class ACPClient: ObservableObject {
     /// Drop transport and reconnect; optionally resume the prior ACP session.
     func reconnect(
         preserveSessionId sessionId: String?,
-        cwd: String? = nil,
-        showLatestMessage: Bool = false
+        cwd: String? = nil
     ) {
         preserveSessionIdOnReconnect = sessionId
         preserveSessionCwdOnReconnect = cwd
-        showLatestMessageOnReconnect = showLatestMessage
         teardownTransport()
         connect()
     }
@@ -250,6 +322,7 @@ final class ACPClient: ObservableObject {
         oldWebSocketTask?.cancel(with: .goingAway, reason: nil)
         let oldWebSocketSession = webSocketSession
         webSocketSession = nil
+        webSocketOpenObserver = nil
         oldWebSocketSession?.invalidateAndCancel()
         isConnected = false
         isPaired = false
@@ -282,7 +355,20 @@ final class ACPClient: ObservableObject {
                 case .waiting:
                     break
                 case .failed(let error):
-                    self.fail("Could not reach agent: \(error.localizedDescription)")
+                    let expectedFingerprint = CompanionConfig.pinnedFingerprint
+                    if let observedFingerprint = self.tlsFingerprintCapture.fingerprint,
+                       !expectedFingerprint.isEmpty,
+                       !CompanionTLS.fingerprintMatches(
+                           observed: observedFingerprint,
+                           expected: expectedFingerprint
+                       ) {
+                        self.fail(
+                            "Companion identity changed. Paste the current PIN again "
+                                + "and leave the TLS fingerprint blank to re-pair."
+                        )
+                    } else {
+                        self.fail("Could not reach companion: \(error.localizedDescription)")
+                    }
                 case .cancelled:
                     self.isConnected = false
                     self.connection = nil
@@ -298,7 +384,6 @@ final class ACPClient: ObservableObject {
     func disconnect() {
         preserveSessionIdOnReconnect = nil
         preserveSessionCwdOnReconnect = nil
-        showLatestMessageOnReconnect = false
         teardownTransport()
         sessionId = nil
     }
@@ -413,8 +498,7 @@ final class ACPClient: ObservableObject {
 
     func loadSession(
         _ sessionId: String,
-        cwd: String? = nil,
-        showLatestMessage: Bool = false
+        cwd: String? = nil
     ) async throws {
         beginSessionHistoryReplay()
         let response: ACPProtocol.JSONRPCResponse
@@ -424,10 +508,10 @@ final class ACPClient: ObservableObject {
                 params: ACPProtocol.sessionLoadParams(sessionId: sessionId, cwd: cwd)
             )
         } catch {
-            endSessionHistoryReplay(showLatestMessage: false)
+            endSessionHistoryReplay(commit: false)
             throw error
         }
-        endSessionHistoryReplay(showLatestMessage: showLatestMessage)
+        endSessionHistoryReplay(commit: true)
         let loadedSessionId = response.result?["sessionId"]?.stringValue ?? sessionId
         self.sessionId = loadedSessionId
         sessionReady = true
@@ -662,15 +746,9 @@ final class ACPClient: ObservableObject {
 
             if let resumeId = preserveSessionIdOnReconnect, !resumeId.isEmpty {
                 let resumeCwd = preserveSessionCwdOnReconnect
-                let showLatestMessage = showLatestMessageOnReconnect
                 preserveSessionIdOnReconnect = nil
                 preserveSessionCwdOnReconnect = nil
-                showLatestMessageOnReconnect = false
-                try await loadSession(
-                    resumeId,
-                    cwd: resumeCwd,
-                    showLatestMessage: showLatestMessage
-                )
+                try await loadSession(resumeId, cwd: resumeCwd)
             } else if let projectName = pendingProjectName?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                       !projectName.isEmpty {
@@ -723,8 +801,7 @@ final class ACPClient: ObservableObject {
             do {
                 try await loadSession(
                     candidate.id,
-                    cwd: candidate.cwd.isEmpty ? nil : candidate.cwd,
-                    showLatestMessage: true
+                    cwd: candidate.cwd.isEmpty ? nil : candidate.cwd
                 )
                 return true
             } catch {
@@ -1111,9 +1188,6 @@ final class ACPClient: ObservableObject {
                     if let update = params["update"]?.objectValue {
                         let kind = update["sessionUpdate"]?.stringValue ?? ""
                         let isHistoryReplay = isReplayingSessionHistory
-                        if isHistoryReplay {
-                            captureReplayedMessage(from: update)
-                        }
                         if kind == "current_mode_update" || kind == "currentModeUpdate" {
                             let modeId = update["currentModeId"]?.stringValue
                                 ?? update["modeId"]?.stringValue
@@ -1136,7 +1210,9 @@ final class ACPClient: ObservableObject {
                             publishChrome()
                         } else if kind == "goal_updated" || kind == "goalUpdated" {
                             applyGoalUpdate(update)
-                        } else if !isHistoryReplay {
+                        } else if isHistoryReplay {
+                            historyReplayTracker?.handleSessionHistoryUpdate(update)
+                        } else {
                             if kind == "tool_call" {
                                 let title = update["title"]?.stringValue ?? ""
                                 if !title.isEmpty {
@@ -1243,50 +1319,18 @@ final class ACPClient: ObservableObject {
 
     private func beginSessionHistoryReplay() {
         isReplayingSessionHistory = true
-        replayedMessageKind = nil
-        replayedMessageText = ""
-        replayedChunkKind = nil
+        historyReplayTracker = ScrollbackTracker()
     }
 
-    private func captureReplayedMessage(from update: [String: ACPProtocol.JSONValue]) {
-        let updateKind = update["sessionUpdate"]?.stringValue ?? ""
-        let messageKind: ScrollbackKind?
-        switch updateKind {
-        case "user_message_chunk":
-            messageKind = .user
-        case "agent_message_chunk":
-            messageKind = .assistant
-        default:
-            replayedChunkKind = nil
-            return
-        }
-
-        guard let messageKind,
-              let content = update["content"]?.objectValue,
-              let text = content["text"]?.stringValue,
-              !text.isEmpty else {
-            return
-        }
-        if replayedChunkKind == messageKind {
-            replayedMessageText += text
-        } else {
-            replayedMessageKind = messageKind
-            replayedMessageText = text
-        }
-        replayedChunkKind = messageKind
-    }
-
-    private func endSessionHistoryReplay(showLatestMessage: Bool) {
+    private func endSessionHistoryReplay(commit: Bool) {
         isReplayingSessionHistory = false
-        if showLatestMessage {
-            tracker.showOnlyLatestMessage(
-                kind: replayedMessageKind,
-                text: replayedMessageText
-            )
+        defer { historyReplayTracker = nil }
+        guard commit, let historyReplayTracker else { return }
+
+        historyReplayTracker.finalizeStreaming(notifying: false)
+        if !historyReplayTracker.entries.isEmpty || tracker.entries.isEmpty {
+            tracker.replaceAll(with: historyReplayTracker.entries)
         }
-        replayedMessageKind = nil
-        replayedMessageText = ""
-        replayedChunkKind = nil
     }
 
     private func applyNotificationMeta(_ meta: [String: ACPProtocol.JSONValue]?) {

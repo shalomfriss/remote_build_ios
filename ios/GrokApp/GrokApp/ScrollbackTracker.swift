@@ -10,14 +10,13 @@ final class ScrollbackTracker {
     private(set) var entries: [ScrollbackEntry] = []
     private var streamingAssistantID: UUID?
     private var streamingThoughtID: UUID?
-    private var pendingAssistantChunks: [String] = []
-    private var pendingThoughtChunks: [String] = []
+    private var pendingAssistantText = ""
+    private var pendingThoughtText = ""
     private var toolEntries: [String: UUID] = [:]
     private(set) var expandedVerbGroupIDs: Set<UUID> = []
     private var pendingNotificationTask: Task<Void, Never>?
 
-    private static let streamingRefreshInterval = Duration.milliseconds(50)
-    private static let maximumToolDetailLength = 12_000
+    private static let streamingRefreshInterval = Duration.milliseconds(100)
 
     var onChange: (([ScrollbackEntry]) -> Void)?
 
@@ -27,31 +26,56 @@ final class ScrollbackTracker {
         entries.removeAll()
         streamingAssistantID = nil
         streamingThoughtID = nil
-        pendingAssistantChunks.removeAll(keepingCapacity: true)
-        pendingThoughtChunks.removeAll(keepingCapacity: true)
+        pendingAssistantText.removeAll(keepingCapacity: true)
+        pendingThoughtText.removeAll(keepingCapacity: true)
         toolEntries.removeAll()
         expandedVerbGroupIDs.removeAll()
         notify()
     }
 
-    /// Replace a loaded transcript with its final conversational message.
-    /// Session history can contain hundreds of tool/thinking updates that should
-    /// not be replayed into the compact phone UI.
-    func showOnlyLatestMessage(kind: ScrollbackKind?, text: String?) {
+    /// Atomically publish a fully replayed transcript. Keeping replay mutations
+    /// off the live tracker prevents hundreds of SwiftUI refreshes during resume.
+    func replaceAll(with loadedEntries: [ScrollbackEntry]) {
+        pendingNotificationTask?.cancel()
+        pendingNotificationTask = nil
         streamingAssistantID = nil
         streamingThoughtID = nil
-        pendingAssistantChunks.removeAll(keepingCapacity: true)
-        pendingThoughtChunks.removeAll(keepingCapacity: true)
-        toolEntries.removeAll()
-        expandedVerbGroupIDs.removeAll()
-
-        let message = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let kind, (kind == .user || kind == .assistant), !message.isEmpty {
-            entries = [ScrollbackEntry(kind: kind, text: message)]
-        } else {
-            entries = []
+        pendingAssistantText.removeAll(keepingCapacity: true)
+        pendingThoughtText.removeAll(keepingCapacity: true)
+        entries = loadedEntries
+        toolEntries.removeAll(keepingCapacity: true)
+        for entry in loadedEntries {
+            if let toolCallId = entry.toolCallId {
+                toolEntries[toolCallId] = entry.id
+            }
         }
+        expandedVerbGroupIDs.removeAll()
         notify()
+    }
+
+    /// Flush pending network chunks before the view is hidden or re-presented.
+    func flushBufferedOutput() {
+        notify()
+    }
+
+    /// History replay includes user chunks that live updates normally append
+    /// locally when the prompt is sent.
+    func handleSessionHistoryUpdate(_ update: [String: ACPProtocol.JSONValue]) {
+        let kind = update["sessionUpdate"]?.stringValue ?? ""
+        guard kind == "user_message_chunk" else {
+            handleSessionUpdate(update)
+            return
+        }
+        guard let content = update["content"]?.objectValue,
+              let text = content["text"]?.stringValue,
+              !text.isEmpty else { return }
+
+        finalizeStreaming(notifying: false)
+        if let lastIndex = entries.indices.last, entries[lastIndex].kind == .user {
+            entries[lastIndex].text += text
+        } else {
+            entries.append(ScrollbackEntry(kind: .user, text: text))
+        }
     }
 
     func appendUser(_ text: String) {
@@ -153,7 +177,7 @@ final class ScrollbackTracker {
 
     private func appendAssistantChunk(_ text: String) {
         if streamingAssistantID != nil {
-            pendingAssistantChunks.append(text)
+            pendingAssistantText += text
         } else {
             finalizeThought()
             let entry = ScrollbackEntry(kind: .assistant, text: text, isStreaming: true)
@@ -165,7 +189,7 @@ final class ScrollbackTracker {
 
     private func appendThoughtChunk(_ text: String) {
         if streamingThoughtID != nil {
-            pendingThoughtChunks.append(text)
+            pendingThoughtText += text
         } else {
             finalizeAssistant()
             // streaming() + default_display_mode Truncated while running.
@@ -279,7 +303,7 @@ final class ScrollbackTracker {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(value),
               let s = String(data: data, encoding: .utf8) else { return "" }
-        return s.count > 400 ? String(s.prefix(400)) + "…" : s
+        return s
     }
 
     private func notify(coalescing: Bool = false) {
@@ -312,24 +336,24 @@ final class ScrollbackTracker {
     }
 
     private func flushAssistantText() {
-        guard !pendingAssistantChunks.isEmpty,
+        guard !pendingAssistantText.isEmpty,
               let id = streamingAssistantID,
               let idx = entries.firstIndex(where: { $0.id == id }) else { return }
-        entries[idx].text += pendingAssistantChunks.joined()
+        entries[idx].text += pendingAssistantText
         entries[idx].isStreaming = true
-        pendingAssistantChunks.removeAll(keepingCapacity: true)
+        pendingAssistantText.removeAll(keepingCapacity: true)
     }
 
     private func flushThoughtText() {
-        guard !pendingThoughtChunks.isEmpty,
+        guard !pendingThoughtText.isEmpty,
               let id = streamingThoughtID,
               let idx = entries.firstIndex(where: { $0.id == id }) else { return }
-        entries[idx].text += pendingThoughtChunks.joined()
+        entries[idx].text += pendingThoughtText
         entries[idx].isStreaming = true
         if entries[idx].thinkingMode == .collapsed {
             entries[idx].thinkingMode = .truncated
         }
-        pendingThoughtChunks.removeAll(keepingCapacity: true)
+        pendingThoughtText.removeAll(keepingCapacity: true)
     }
 
     private static func appendingToolDetail(_ newDetail: String, to existing: String?) -> String {
@@ -337,10 +361,7 @@ final class ScrollbackTracker {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
-        guard combined.count > maximumToolDetailLength else { return combined }
-
-        let retainedSuffix = combined.suffix(maximumToolDetailLength)
-        return "… earlier output omitted …\n" + String(retainedSuffix)
+        return combined
     }
 
     /// Display layer: verb-group fold + thinking visibility.
